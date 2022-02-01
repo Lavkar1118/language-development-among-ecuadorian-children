@@ -19,7 +19,7 @@ Assessed the association between home environment and language development among
 * Cronbach's alpha score was used to validate both in-survey measurement tools
 * Language development scores were calculated separately for 12- 18 months (word prodution and word comprehension) and for 19-30 months (word prodution) and 31-35 months (word prodution) and fitted scores were plotted.
 
-![This is an image](CDI_scores/Assets/.png)
+![This is an image](/Assets/CDI_scores/.png)
 
 * HOME Inventory scors were calculated for each of the age categories.
 
