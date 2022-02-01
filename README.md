@@ -14,7 +14,7 @@ Assessed the association between home environment and language development among
 #### Analytical Process:
 * Weighted survey data was obtained from [ENSAUT website](https://www.ecuadorencifras.gob.ec/salud-salud-reproductiva-y-nutricion/) in the form of csv files.
 * Based on the MacArthur scales, data was split into three subgroups: 12- 18 months, 19-30 months and 31-35 months
-* Data Wrangling was perfomred using R software.
+* Data Wrangling was performed using R software.
   * Libraries used: tidyverse, data.table, tableone, ggplot2, quantreg, srvyr, gtsummary, survey, psych, corrplot
 * Cronbach's alpha score was used to validate both in-survey measurement tools
 * Language development scores were calculated separately for 12- 18 months (word prodution and word comprehension) and for 19-30 months (word prodution) and 31-35 months (word prodution) and fitted scores were plotted.
@@ -25,7 +25,7 @@ Assessed the association between home environment and language development among
 
 ![This is an image](/Assets/HOME_scores.png)
 
-* Language development and HOME scores in the sample indcated a positive relationship.
+* Language development and HOME scores in the sample indcated a moderate positive relationship.
 
 ![This is an image](/Assets/HOME_vs_CDI.png)
 
