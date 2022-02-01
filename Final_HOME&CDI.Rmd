@@ -1,0 +1,2725 @@
+
+title: "Final_Home&CDI"
+author: "Lavanya Muthukumar"
+date: "8/2/2021"
+output: word_document
+editor_options: 
+  chunk_output_type: console
+---
+
+
+```{r library}
+library (tidyverse)
+library(data.table)
+library(tibble)
+library(dplyr)
+library(tableone)
+library(ggplot2)
+library(quantreg)
+library(srvyr)
+library(gtsummary)
+library(survey)
+library(psych)
+library(corrplot)
+library(poliscidata) #to get model fit when using svyglm
+library(scales)
+library(weights) #to get correlation coefficients
+library(wCorr) #to get spearman correlation for categorical vs continuous variable
+library(Rcpp)#  ""
+
+```
+
+
+```{r data_loading}
+
+setwd("C:/SPH/MS_Umich/Research/ENSANUT - 2018/ENSANUT_Analysis")
+
+data.inf <- read_csv("Data/CSV/9_BDD_ENS2018_f5_des_inf.csv")
+
+data.per <- read_csv("Data/CSV/1_BDD_ENS2018_f1_personas.csv")
+
+```
+
+```{r - condensing data.per to home IDs in data.inf}
+
+data.combined <- subset(data.per, id_hogar %in% data.inf$id_hogar) #kids + mothers in inf data
+
+```
+
+```{r - demographic data of kids and mothers separately}
+
+data.kids <- subset(data.combined, id_per %in% data.inf$id_per) #all kids in inf data
+
+
+data.mom<- subset(data.combined, id_per %in% data.inf$id_mef) #all moms in inf data
+
+```
+
+
+```{r creating age in months}
+
+#age in months
+data.inf <- data.inf %>% mutate(years_to_months = f5_s1_100_6 * 12) 
+
+data.inf <-  data.inf %>%
+  add_column(Age_months = data.inf$f5_s1_100_7 + data.inf$years_to_months, .after = "f5_s1_100_7") 
+
+
+```
+
+
+```{r data_wrangling in data.inf}
+
+
+#getting kids height from data.kids
+
+data.height <- data.kids %>% dplyr:: select(id_per,f1_s7_5_1,f1_s7_6_1 )
+
+data.disease <- data.kids %>% dplyr:: select(id_per,f1_s4_2, f1_s4_3)
+
+#merging height data with inf data
+
+data.inf <- merge(data.inf, data.height, by= "id_per")
+data.inf <- merge(data.inf, data.disease, by= "id_per")
+
+
+#getting height in a single col
+
+data.inf <- data.inf %>% mutate(height = ifelse(Age_months < 24, f1_s7_5_1, f1_s7_6_1), .after = "Age_months")
+
+#renaming illness col
+
+data.inf <- data.inf%>% rename(Acute_ill = f1_s4_2 , Chronic_ill = f1_s4_3)
+
+# renaming and factorizing malnourishment
+
+data.inf <- data.inf %>%  mutate(dcronica = factor(dcronica))  %>% mutate(mal_nourished = fct_collapse(dcronica, yes = "1", no = "0"))
+
+# renaming and factorizing gender
+
+data.inf <- data.inf %>%  mutate(sexo = factor(sexo))  %>% mutate(gender = fct_collapse(sexo, male = "1", female = "2"), .after = sexo)
+
+
+#renaming mother's edu
+
+data.inf <- data.inf%>% rename(mother_edu = nivins_mef)
+
+#factorizing area - urban/rural
+
+data.inf<- data.inf%>% mutate (area = as.factor(area)) %>% mutate(area_cat = fct_collapse(area, urban = "1", rural = "2"), .after = area)
+
+#factorizing province
+
+data.inf<- data.inf%>%  mutate (prov = as.factor(prov)) %>% mutate(prov_cat = fct_collapse(prov, Azuay = "01", Bolivar = "02", Canar = "03", Carchi = "04", Cotopaxi = "05", Chimborazo = "06", El_Oro = "07", Esmeraldas = "08",
+Guayas = "09", Imbabura = "10", Loja = "11", Los_Rios = "12", Manabi = "13", Morona_Santiago = "14",Napo = "15", Pastaza = "16", Pichincha = "17", Tungurahua = "18", Zamora_Chinchipe = "19", Galapagos = "20",Sucumbios = "21", Orellana = "22", Santo_Domingo = "23", Santa_Elena = "24", Undefined_zones = "90"),.after = prov)
+
+#factorizing regions
+
+data.inf<- data.inf%>%  mutate (region = as.factor(region)) %>% mutate(region_cat = fct_collapse (region,  Sierra = "1", Coast = "2" , Amazon = "3", Insular = "4"), .after = prov_cat)
+
+#renaming mother's age
+
+
+data.inf<- data.inf%>% mutate(Mother_age = edadanios_mef, .after =region_cat )
+
+
+#factorizing ethnicity
+
+data.inf<- data.inf%>% mutate(etnia = as.factor(etnia)) %>%
+mutate(ethinicity = fct_collapse(etnia, Indigenous = "1", Afro_Ecuadorian = "2",Black = "3",  Mulatto = "4", Montuvio  = "5", Mixed_race = "6", White = "7", Another = "8"), .after = Mother_age)
+
+#factorizing education
+
+data.inf<- data.inf%>% mutate(mother_edu = as.factor(mother_edu)) %>%
+mutate(mother_edu_cat = fct_collapse(mother_edu, None = "1", Literacy_Center = "2", Kindergarten = "3",
+Primary = "4", Basic_Education = "5", Secondary  = "6", Baccalaureate = "7", Non_University_Higher ="8", University_Superior = "9",Postgrad_PHD  = "10"), .after= ethinicity)
+
+
+```
+
+```{r}
+#splitting data based on age groups
+
+#12-18 months
+ 
+CDI_I <- data.inf %>%
+  filter(Age_months > 11 & Age_months < 19) %>%
+  select (id_per : f5_s1_100_7,Age_months,height, f5_s10_1_1 :f5_s10_6_45,f5_s6_600,
+          f5_s6_601 : f5_s6_650,mother_edu,mal_nourished, Acute_ill,region,etnia, fexp,estrato )  %>% na.omit()
+
+CDI_I <- CDI_I %>% rename(lang_spoken = f5_s6_600)
+
+#19-30 months
+
+CDI_II <- data.inf %>% 
+  filter(Age_months > 18 & Age_months < 31) %>%
+  select (id_per : f5_s1_100_7,Age_months,height, f5_s10_1_1 : f5_s10_6_45,f5_s7_700,f5_s7_701 : f5_s7_750 ,mother_edu,mal_nourished,Acute_ill,region,etnia,fexp,estrato ) %>% na.omit()
+
+
+CDI_II <- CDI_II %>% rename(lang_spoken = f5_s7_700)
+
+
+#31 - 36 months
+
+CDI_III <- data.inf %>%
+  filter(Age_months > 30 & Age_months < 36) %>%
+  select (id_per : f5_s1_100_7 ,Age_months,height,f5_s10_1_1 : f5_s10_6_45,f5_s8_800, f5_s8_801 : f5_s8_850,
+          mother_edu,mal_nourished,Acute_ill,region,etnia, fexp,estrato ) %>% na.omit()
+
+CDI_III <- CDI_III %>% rename(lang_spoken = f5_s8_800)
+
+```
+
+
+
+```{r - data wrangling to get demographics of mom (whole sample) }
+
+#for overall sample characteristics use -> data.mom
+
+#factorizing area - urban/rural
+
+data.mom <- data.mom %>% mutate (area = as.factor(area)) %>% mutate(area_cat = fct_collapse(area, urban = "1", rural = "2"), .after = area)
+
+data.mom <- data.mom %>%  mutate (prov = as.factor(prov)) %>% mutate(prov_cat = fct_collapse(prov, Azuay = "01", Bolivar = "02", Canar = "03", Carchi = "04", Cotopaxi = "05", Chimborazo = "06", El_Oro = "07", Esmeraldas = "08",
+Guayas = "09", Imbabura = "10", Loja = "11", Los_Rios = "12", Manabi = "13", Morona_Santiago = "14",Napo = "15", Pastaza = "16", Pichincha = "17", Tungurahua = "18", Zamora_Chinchipe = "19", Galapagos = "20",Sucumbios = "21", Orellana = "22", Santo_Domingo = "23", Santa_Elena = "24", Undefined_zones = "90"),.after = prov)
+   
+#getting overall age
+
+data.mom$f1_s2_3_2 = NULL #remove age in months -  too many NAs
+
+data.mom <- data.mom %>% rename(Age = f1_s2_3_1)
+
+
+#factorizing ethnicity
+
+data.mom <- data.mom %>% mutate(f1_s2_9 = as.factor(f1_s2_9)) %>%
+mutate(ethinicity = fct_collapse(f1_s2_9, Indigenous = "1", Afro_Ecuadorian = "2",Black = "3",  Mulatto = "4", Montuvio  = "5", Mixed_race = "6", White = "7", Another = "8"), .after = Age)
+
+#factorizing education
+
+data.mom <- data.mom %>% mutate(f1_s2_19_1 = as.factor(f1_s2_19_1)) %>%
+mutate(education = fct_collapse(f1_s2_19_1, None = "1", Literacy_Center = "2", Kindergarten = "3",
+Primary = "4", Basic_Education = "5", Secondary  = "6", Baccalaureate = "7", Non_University_Higher ="8", University_Superior = "9",Postgrad_PHD  = "10"), .after= ethinicity)
+
+
+
+```
+
+
+```{r - data wrangling to get demographics of mom (CDI sample) }
+
+#data of all mothers in CDI sample  
+
+data.mom.CDI.I <- subset(data.inf, id_mef %in% CDI_I$id_mef)
+data.mom.CDI.II <- subset(data.inf, id_mef %in% CDI_II$id_mef)
+data.mom.CDI.III <- subset(data.inf, id_mef %in% CDI_III$id_mef)
+
+#binding everything
+
+data.mom.CDI.final <- rbind(data.mom.CDI.I,data.mom.CDI.II, data.mom.CDI.III)
+
+```
+
+```{r}
+#getting data of kids in CDI_analysis
+
+data.kid.CDI.I <- subset(data.inf, id_per %in% CDI_I$id_per)
+data.kid.CDI.II <- subset(data.inf, id_per %in% CDI_II$id_per)
+data.kid.CDI.III <- subset(data.inf, id_per %in% CDI_III$id_per)
+
+#binding everything
+
+data.kid.CDI.final <- rbind(data.kid.CDI.I,data.kid.CDI.II, data.kid.CDI.III)
+```
+
+
+```{r   cronbach's alpha for home subscales}
+
+
+organization <- data.kid.CDI.final %>% select(f5_s10_1_1 : f5_s10_1_6)
+psych::alpha(organization)
+
+#0.57
+
+emotional <- data.kid.CDI.final %>% select(f5_s10_2_7 : f5_s10_2_17)
+psych::alpha(emotional)
+
+#0.87
+
+acceptance <- data.kid.CDI.final %>% select(f5_s10_3_18 : f5_s10_3_25)
+psych::alpha(acceptance)
+
+# 0.68
+
+
+stimulation <- data.kid.CDI.final %>% select(f5_s10_4_26 : f5_s10_4_30)
+psych::alpha(stimulation)
+
+#0.43
+
+game_material <- data.kid.CDI.final %>% select(f5_s10_5_31 : f5_s10_5_39)
+psych::alpha(game_material)
+
+#0.84
+
+
+mother_involvement <- data.kid.CDI.final %>% select(f5_s10_6_40 : f5_s10_6_45)
+psych::alpha(mother_involvement)
+
+#0.72
+
+```
+
+```{r cronbach's alpha for vocabulary checklist}
+
+Alpha_word_prod_I <- CDI_I %>% select (f5_s6_601 : f5_s6_650 )
+psych::alpha(Alpha_word_prod_I)
+
+
+#0.97
+
+Alpha_word_prod_II <- CDI_II %>% select (f5_s7_701 : f5_s7_750 )
+psych::alpha(Alpha_word_prod_II)
+
+
+#0.97
+
+Alpha_word_prod_III <- CDI_III %>% select (f5_s8_801 : f5_s8_850 )
+psych::alpha(Alpha_word_prod_III)
+
+#0.97
+
+```
+
+
+
+```{r MacArthur scores}
+
+#calculation
+word_prod_I <- rowSums(CDI_I[71:120]==1) #row total to calculate cognitive scores
+word_comp_I <- rowSums(CDI_I[71:120]==2) 
+
+#mutate to df
+CDI_I <- add_column(CDI_I, word_prod_I, word_comp_I, .after = "Age_months")
+
+CDI_I <- add_column(CDI_I,  word_comp_I_total = word_prod_I + word_comp_I, .after = "word_comp_I")
+
+
+#calculation
+word_prod_II <- rowSums(CDI_II[71:120]==1)
+
+#mutate to df
+CDI_II <- add_column(CDI_II, word_prod_II, .after = "Age_months")
+
+#calculation
+word_prod_III <- rowSums(CDI_III[71:120]==1)
+
+#mutate to df
+CDI_III <- add_column(CDI_III, word_prod_III, .after = "Age_months")
+
+```
+
+```{r  column rename}
+
+CDI_I <- CDI_I %>% 
+  rename(Word_Production = word_prod_I, 
+         Word_Comprehension = word_comp_I_total)
+
+CDI_II <- CDI_II %>% 
+  rename(Word_Production = word_prod_II)
+
+CDI_III <- CDI_III %>% 
+  rename(Word_Production = word_prod_III)
+```
+
+
+```{r home_inventory_scores- 1}
+
+#Calculation of scores
+
+scale_1_org <- rowSums(CDI_I[28:33]==1)
+
+scale_2_response <- rowSums(CDI_I[34:44]==1)
+
+scale_3_acceptance <- rowSums(CDI_I[45:52]==1)
+
+scale_3_modified <- rowSums(CDI_I[c(45, 47:52)]==1) 
+
+scale_4_opportunity <- rowSums(CDI_I[53:57]==1)
+
+scale_5_games <- rowSums(CDI_I[58:66]==1)
+
+scale_6_mother_inv <- rowSums(CDI_I[67:72]==1)
+
+#adding cols to dataframe
+
+CDI_I <- add_column(CDI_I,scale_1_org,
+                             scale_2_response,scale_3_acceptance,scale_3_modified,
+                             scale_4_opportunity,scale_5_games,
+                             scale_6_mother_inv,.after = "Age_months")
+
+
+#getting total
+
+CDI_I <- CDI_I %>% 
+  mutate(Home_inventory = (scale_1_org+ scale_2_response+ scale_3_acceptance + scale_4_opportunity + scale_5_games + scale_6_mother_inv),.after= scale_6_mother_inv)
+
+CDI_I <- CDI_I %>% 
+  mutate(Home_inventory_mod = (scale_1_org+ scale_2_response+ scale_3_modified +
+                               scale_5_games + 
+                              scale_6_mother_inv),
+                             .after= Home_inventory )
+
+
+```
+
+```{r home_inventory_scores- 2}
+
+#Calculation of scores
+
+scale_1_org <- rowSums(CDI_II[26:31]==1)
+
+scale_2_response <- rowSums(CDI_II[32:42]==1)
+
+scale_3_acceptance <- rowSums(CDI_II[43:50]==1)
+
+scale_3_modified <- rowSums(CDI_II[c(43,45:50)]==1)
+
+scale_4_opportunity <- rowSums(CDI_II[51:55]==1)
+
+scale_5_games <- rowSums(CDI_II[56:64]==1)
+
+scale_6_mother_inv <- rowSums(CDI_II[65:70]==1)
+
+#adding cols to dataframe
+
+CDI_II <- add_column(CDI_II,scale_1_org,
+                             scale_2_response,scale_3_acceptance,scale_3_modified,
+                             scale_4_opportunity,scale_5_games,
+                             scale_6_mother_inv,.after = "Age_months")
+
+
+#getting total
+
+CDI_II <- CDI_II %>% 
+  mutate(Home_inventory = (scale_1_org+ scale_2_response+ scale_3_acceptance +
+                              scale_4_opportunity + scale_5_games + 
+                              scale_6_mother_inv),
+                             .after= scale_6_mother_inv)
+
+CDI_II <- CDI_II %>% 
+  mutate(Home_inventory_mod = (scale_1_org+ scale_2_response+ scale_3_modified + scale_5_games + scale_6_mother_inv),.after= Home_inventory)
+```
+
+
+```{r home_inventory_scores- 3}
+
+#Calculation of scores
+
+scale_1_org <- rowSums(CDI_III[26:31]==1)
+
+scale_2_response <- rowSums(CDI_III[32:42]==1)
+
+scale_3_acceptance <- rowSums(CDI_III[43:50]==1)
+
+scale_3_modified <- rowSums(CDI_III[c(43,45:50)]==1)
+
+scale_4_opportunity <- rowSums(CDI_III[51:55]==1)
+
+scale_5_games <- rowSums(CDI_III[56:64]==1)
+
+scale_6_mother_inv <- rowSums(CDI_III[65:70]==1)
+
+
+#adding cols to dataframe
+
+CDI_III <- add_column(CDI_III,scale_1_org,
+                             scale_2_response,scale_3_acceptance,scale_3_modified,
+                             scale_4_opportunity,scale_5_games,
+                             scale_6_mother_inv,.after = "Age_months")
+
+
+#getting total (whole and modified)
+
+CDI_III <- CDI_III %>% 
+  mutate(Home_inventory = (scale_1_org+ scale_2_response+   scale_3_acceptance +
+                              scale_4_opportunity + scale_5_games + 
+                              scale_6_mother_inv),
+                             .after= scale_6_mother_inv)
+
+CDI_III <- CDI_III %>% 
+  mutate(Home_inventory_mod = (scale_1_org+ scale_2_response+ scale_3_modified + scale_5_games + 
+                                 scale_6_mother_inv),
+         .after= Home_inventory)
+
+```
+
+
+```{r creating categorical variable for home scores }
+
+#along with factorization and ordering
+
+CDI_I <- CDI_I %>% mutate(Home_score_cat = ifelse(Home_inventory<25,"Low", ifelse(Home_inventory>=25 & Home_inventory<=30, "Moderate", "High")))
+
+CDI_I$Home_score_cat <- factor(CDI_I$Home_score_cat , ordered = TRUE, c("Low", "Moderate", "High"))
+
+CDI_II <- CDI_II %>% mutate(Home_score_cat = ifelse(Home_inventory<25,"Low", ifelse(Home_inventory>=25 & Home_inventory<=30, "Moderate", "High")))
+
+CDI_II$Home_score_cat <- factor(CDI_II$Home_score_cat , ordered = TRUE, c("Low", "Moderate", "High"))
+
+CDI_III <- CDI_III %>% mutate(Home_score_cat = ifelse(Home_inventory<25,"Low", ifelse(Home_inventory>=25 & Home_inventory<=30, "Moderate", "High")))
+
+CDI_III$Home_score_cat <- factor(CDI_III$Home_score_cat , ordered = TRUE, c("Low", "Moderate", "High"))
+
+```
+
+
+```{r - including the weights}
+##1
+
+options(survey.lonely.psu = "certainty")
+
+CDI_I_svy <- svydesign(ids = ~ upm, strata= ~estrato, 
+                       nest=TRUE,weights = ~fexp, data = CDI_I )
+##2
+
+CDI_II_svy <- svydesign(ids = ~ upm, strata= ~estrato, 
+                       nest=TRUE,weights = ~fexp, data = CDI_II )
+##3
+
+CDI_III_svy <- svydesign(ids = ~ upm, strata= ~estrato, 
+                       nest=TRUE,weights = ~fexp, data = CDI_III )
+
+##4
+
+data.mom.CDI.final_svy <- svydesign(ids = ~ upm, strata= ~estrato, 
+                       nest=TRUE,weights = ~fexp, data = data.mom.CDI.final)
+
+##5
+data.mom_svy <- svydesign(ids = ~ upm, strata= ~estrato, 
+                       nest=TRUE,weights = ~fexp, data = data.mom)
+
+##6
+
+data.kid.CDI.final_svy <- svydesign(ids = ~ upm, strata= ~estrato, 
+                       nest=TRUE,weights = ~fexp, data = data.kid.CDI.final)
+
+
+```
+
+```{r  creating maternal characteristics table (overall sample)}
+
+#creating table (with weight)
+
+demograph_table <- svydesign(ids = ~ upm, strata= ~estrato, 
+                       nest=TRUE,weights = ~fexp, data = data.mom) %>%
+  
+  tbl_svysummary(include = c(Age,education, area_cat,prov_cat, ethinicity),
+                                                                                      type = list( all_continuous() ~ 'continuous2', all_categorical() ~ "categorical" ),
+                                                                                                statistic = list(all_continuous()  ~ c("{mean}({sd})", "{N_obs_unweighted}"), all_categorical() ~ c("{N_obs_unweighted} ({p}%)"))) 
+
+
+demograph_table
+
+
+#to save table as image
+
+demograph_table %>% as_gt() %>%            
+  gt::gtsave(filename = "demograph_1_weights.rtf")
+
+
+#creating table (without weight)
+
+demograph_table_2 <- tbl_summary(data = data.mom, include = c(Age,education, area_cat,prov_cat, ethinicity), statistic = list(Age ~ "{mean}({sd})"))
+
+
+demograph_table_2
+
+#to save table as image
+demograph_table_2 %>% as_gt() %>%            
+  gt::gtsave(filename = "demograph_1_without_weights.rtf")
+
+
+```
+
+```{r  creating maternal characteristics table (CDI sample)}
+
+#creating table (with weight)
+
+demograph_table_short <- svydesign(ids = ~ upm, strata= ~estrato, 
+                       nest=TRUE,weights = ~fexp, data = data.mom.CDI.final) %>% 
+  tbl_svysummary(include = c(Mother_age,mother_edu_cat, area_cat,prov_cat, ethinicity),
+                 type = list( all_continuous() ~ 'continuous2', all_categorical() ~ "categorical" ),
+                                                                                                statistic = list(all_continuous()  ~ c("{mean}({sd})", "{N_obs_unweighted}"), all_categorical() ~ c("{N_obs_unweighted} ({p}%)"))) 
+
+
+demograph_table_short
+
+
+#to save table as image
+
+demograph_table_short %>% as_gt() %>%            
+  gt::gtsave(filename = "demograph_2_weights_short.rtf")
+
+
+#creating table (without weight)
+
+demograph_table_short_2 <- tbl_summary(data = data.mom.CDI.final, include = c(Mother_age,mother_edu_cat, area_cat,prov_cat, ethinicity), statistic = list(Mother_age ~ "{mean}({sd})"))
+
+
+demograph_table_short_2
+
+#to save table as image
+demograph_table_short_2 %>% as_gt() %>%            
+  gt::gtsave(filename = "demograph_2_without_weights_short.rtf")
+
+
+```
+
+
+```{r creating kids characteristics table (CDI sample)}
+
+#creating table (without weight)
+
+demograph_table_3 <- tbl_summary(data = data.kid.CDI.final, 
+                                       include = c(gender,Age_months, region_cat, mal_nourished,height), by = "gender", statistic = list(all_continuous() ~ "{mean} ({sd})"))
+
+
+demograph_table_3
+
+#to save table as image
+demograph_table_3 %>% as_gt() %>%            
+  gt::gtsave(filename = "demograph_without_weights_3.rtf")
+
+#with weights
+
+demograph_table_4 <- svydesign(ids = ~ upm, strata= ~estrato, 
+                       nest=TRUE,weights = ~fexp, data = data.kid.CDI.final) %>%
+  
+  tbl_svysummary(include = c(gender,Age_months, region_cat, mal_nourished,height), by = "gender" ,
+                                                                                                type = list( all_continuous() ~ 'continuous2', all_categorical() ~ "categorical" ),
+                                                                                                statistic = list(all_continuous()  ~ c("{mean}({sd})", "{N_obs_unweighted}"), all_categorical() ~ c("{N_obs_unweighted} ({p}%)")))
+
+demograph_table_4
+
+#to save table as image
+demograph_table_4 %>% as_gt() %>%            
+  gt::gtsave(filename = "demograph_with_weights_4.rtf")
+
+
+#without splitting the gender
+
+demograph_table_5 <- tbl_summary(data = data.kid.CDI.final, 
+                                        include = c(gender,Age_months, region_cat, mal_nourished,Acute_ill, mother_edu_cat), statistic = list(all_continuous() ~ "{mean} ({sd})"))
+
+
+demograph_table_5
+
+#to save table as image
+
+demograph_table_5 %>% as_gt() %>%            
+   gt::gtsave(filename = "demograph_without_weights_5.rtf")
+
+#with weights
+
+demograph_table_6 <- svydesign(ids = ~ upm, strata= ~estrato, 
+                       nest=TRUE,weights = ~fexp, data = data.kid.CDI.final) %>%
+  
+  tbl_svysummary(include = c(gender,Age_months, region_cat, mal_nourished,height, Acute_ill, mother_edu_cat), 
+                                                                                                type = list( all_continuous() ~ 'continuous2', all_categorical() ~ "categorical" ),
+                                                                                                statistic = list(all_continuous()  ~ c("{mean}({sd})")))
+
+demograph_table_6
+
+#to save table as image
+demograph_table_6 %>% as_gt() %>%            
+  gt::gtsave(filename = "demograph_with_weights_6.rtf")
+
+
+```
+
+
+```{r  distribution of maternal education and malnutrition}
+
+
+#education distribution for mom in overall sample
+
+svyr_data_mom <- data.mom %>%  as_survey_design(ids = upm, strata= estrato, nest=TRUE,weights = fexp)
+ 
+mom_by_area <- svyr_data_mom %>% group_by(education, area_cat) %>% summarise("Mom_count" = length(id_per))
+ 
+ 
+theme_update(plot.title = element_text(hjust= 0.5)) 
+ 
+png("Mother_edu_whole .png ", width = 7,
+  height    = 4.5,
+  units     = "in",
+  res       = 500,
+  pointsize = 4)
+
+
+Mother_edu_whole <- ggplot(mom_by_area, aes(x = education, y = Mom_count)) + 
+  geom_col(aes(fill = area_cat), position = "dodge")+ 
+  guides(x = guide_axis(angle = 40))+ 
+  labs(title = "Distribution of maternal education in the overall sample", x = "Level of education", y ="Count") + 
+  scale_fill_discrete("Area")+
+  theme(axis.text = element_text(size = 10),
+        axis.title.x = element_text(face = "bold",size =11), axis.title.y = element_text(face = "bold",size =11), axis.text.x  = element_text(face = "bold",size = 11), axis.text.y = element_text(face = "bold",size = 11)) 
+
+Mother_edu_whole
+
+dev.off()
+
+
+#education distribution for mom in CDI sammple
+
+svyr_data_mom_CDI <- data.mom.CDI.final %>%  as_survey_design(ids = upm, strata= estrato, nest=TRUE,weights = fexp)
+ 
+mom_by_area_CDI <- svyr_data_mom_CDI %>% group_by(mother_edu_cat, area_cat) %>% summarise("Mom_count" = length(id_per))
+ 
+
+png("Mother_edu_CDI .png ", width = 7,
+  height    = 4.5,
+  units     = "in",
+  res       = 500,
+  pointsize = 4)
+
+
+Mother_edu_CDI<- ggplot(mom_by_area_CDI, aes(x = mother_edu_cat, y = Mom_count)) + geom_col(aes(fill = area_cat), position = "dodge", width = 0.5)+ guides(x = guide_axis(angle = 40)) + 
+  labs(title = "Distribution of maternal education in the CDI sample", x = "Level of education", y ="Count") + 
+  scale_fill_discrete("Area")+
+  theme(axis.text = element_text(size = 10),
+        axis.title.x = element_text(face = "bold",size =11), axis.title.y = element_text(face = "bold",size =11), axis.text.x  = element_text(face = "bold",size = 11), axis.text.y = element_text(face = "bold",size = 11)) 
+
+Mother_edu_CDI
+
+dev.off()
+
+
+#distribution of mal_nutrition by area and overall distribution of children by area
+
+svyr_data_kid <- data.kid.CDI.final %>%  as_survey_design(ids = upm, strata= estrato, nest=TRUE,weights = fexp)
+ 
+kid_nutri_by_area<- svyr_data_kid %>% group_by(mal_nourished, area_cat) %>% summarise("Mal_nourished_count" = length(id_per)) 
+
+
+kid_nutri_by_area<- kid_nutri_by_area  %>% group_by(area_cat) %>% mutate(Percent_mal_nourished = round( (Mal_nourished_count/sum(Mal_nourished_count)*100),2))
+
+png("kid_nutri_by_area .png ", width = 7,
+  height    = 4.5,
+  units     = "in",
+  res       = 500,
+  pointsize = 4)
+
+
+kid_nutri_area <- ggplot(kid_nutri_by_area, aes(x = mal_nourished, y = Percent_mal_nourished)) + geom_col(aes(fill = area_cat), position = "dodge", width = 0.35)+ guides(x = guide_axis(angle = 40)) + 
+  labs(title = "Distribution of chronic malnutrition by Area", x = "Presence of Malnutrition", y ="Percentage") + 
+  scale_fill_discrete("Area")+
+  theme(axis.text = element_text(size = 10),
+        axis.title.x = element_text(face = "bold",size =11), axis.title.y = element_text(face = "bold",size =11), axis.text.x  = element_text(face = "bold",size = 11), axis.text.y = element_text(face = "bold",size = 11)) + theme(legend.title = element_text(colour="black", size=10, face="bold"))
+
+kid_nutri_area
+
+dev.off()
+
+
+#getting total kids sampled by area
+
+kid_by_area<- svyr_data_kid %>% group_by(area_cat) %>% summarise("Sample_count" = length(id_per)) %>% mutate(Percent_sampled = round( (Sample_count/sum(Sample_count)*100),2))
+
+png("kid_by_area .png ", width = 7,
+  height    = 4.5,
+  units     = "in",
+  res       = 500,
+  pointsize = 4)
+
+
+kid_by_area <- ggplot(kid_by_area, aes(x = area_cat, y = Percent_sampled)) + geom_col(aes(fill = area_cat), position = "dodge", width = 0.35)+ guides(x = guide_axis(angle = 40)) + 
+  labs(title = "Participant distribution by Area", x = "Area", y ="Percentage") + 
+  scale_fill_discrete("Area")+
+  theme(axis.text = element_text(size = 10),
+        axis.title.x = element_text(face = "bold",size =11), axis.title.y = element_text(face = "bold",size =11), axis.text.x  = element_text(face = "bold",size = 11), axis.text.y = element_text(face = "bold",size = 11)) + theme(legend.title = element_text(colour="black", size=10, face="bold"))
+
+kid_by_area
+
+dev.off()
+
+
+
+```
+
+```{r new theme for graphs}
+
+my_theme = list(theme_bw() + theme(axis.text = element_text(size = 10),   axis.title.x = element_text(face = "bold",size =11),
+axis.title.y = element_text(face = "bold",size =11), axis.text.x  = element_text(face = "bold",size = 11), axis.text.y = element_text(face = "bold",size = 11)) + theme(legend.title = element_text(colour="black", size=10, face="bold"), plot.title = element_text(hjust= 0.5),plot.caption = element_text(size=10, face="bold", color="black")))
+
+
+
+my_theme2 = list(theme_bw() + theme(axis.text = element_text(size = 10),   axis.title.x = element_text(face = "bold",size =11),
+axis.title.y = element_text(face = "bold",size =11), axis.text.x  = element_text(face = "bold",size = 11), axis.text.y = element_text(face = "bold",size = 11)) + theme(legend.title = element_text(colour="black", size=10, face="bold"), plot.title = element_text(hjust= 0.5),plot.caption = element_text(size=10, face="bold", color="black"),legend.key.height= unit(1, 'cm'),
+        legend.key.width= unit(1.5, 'cm'), legend.text = element_text(colour="black", size=7, face="bold"))
+)
+
+```
+
+
+```{r CDI_scores with and without weight}
+
+##1
+
+CDI_I_noweights  <- CDI_I %>% tbl_summary(by = Age_months, include = c (Word_Production, Word_Comprehension, Age_months), type = list(Word_Production ~ 'continuous2', Word_Comprehension ~ 'continuous2'),statistic = list(all_continuous() ~ c("{mean}({sd})", "{min}, {max}")))
+
+CDI_I_noweights 
+
+CDI_I_noweights  %>% as_gt() %>%            
+  gt::gtsave(filename = "CDI_I_noweights .rtf")
+
+CDI_I_weights <- CDI_I_svy %>% tbl_svysummary (by = Age_months, include = c (Word_Production, Word_Comprehension, Age_months), type = list(Word_Production ~ 'continuous2', Word_Comprehension ~ 'continuous2'),statistic = list(all_continuous() ~ c("{mean}({sd})", "{min}, {max}","{N_obs}", "{N_obs_unweighted}")))
+
+CDI_I_weights 
+
+CDI_I_weights  %>% as_gt() %>%            
+  gt::gtsave(filename = "CDI_I_weights .rtf")
+
+##2
+
+CDI_II_noweights <- CDI_II %>% tbl_summary(by = Age_months, include = c (Word_Production, Age_months), type = list(Word_Production ~ 'continuous2'),statistic = list(all_continuous() ~ c("{mean}({sd})", "{min}, {max}")))
+
+CDI_II_noweights
+
+CDI_II_noweights  %>% as_gt() %>%            
+  gt::gtsave(filename = "CDI_II_noweights.rtf")
+
+
+
+CDI_II_weights <- CDI_II_svy %>% tbl_svysummary (by = Age_months, include = c (Word_Production, Age_months), type = list(Word_Production ~ 'continuous2'),statistic = list(all_continuous() ~ c("{mean}({sd})", "{min}, {max}","{N_obs}", "{N_obs_unweighted}")))
+
+CDI_II_weights
+
+CDI_II_weights  %>% as_gt() %>%            
+  gt::gtsave(filename = "CDI_II_weights .rtf")
+
+##3
+
+CDI_III_noweights <- CDI_III %>% tbl_summary(by = Age_months, include = c (Word_Production, Age_months), type = list(Word_Production ~ 'continuous2'),statistic = list(all_continuous() ~ c("{mean}({sd})", "{min}, {max}")))
+
+CDI_III_noweights
+
+CDI_III_noweights  %>% as_gt() %>%            
+  gt::gtsave(filename = "CDI_III_noweights .rtf")
+
+
+CDI_III_weights <- CDI_III_svy %>% tbl_svysummary (by = Age_months, include = c (Word_Production, Age_months), type = list(Word_Production ~ 'continuous2'),statistic = list(all_continuous() ~ c("{mean}({sd})", "{min}, {max}","{N_obs}", "{N_obs_unweighted}")))
+
+CDI_III_weights 
+
+CDI_III_weights  %>% as_gt() %>%            
+  gt::gtsave(filename = "CDI_III_weights .rtf")
+
+```
+
+```{r 95% CI and p values to check for difference in mean}
+
+#svyby: Survey statistics on subsets
+#getting p-value using anova
+
+#CDI_I- WP
+
+mean_CDI_I <- round(svyby(~ Word_Production, ~Age_months, CDI_I_svy, svymean,quantiles=0.5,ci=TRUE,vartype="ci"), digits =0)
+
+write.csv(mean_CDI_I, "mean_CDI_I.csv")
+
+glm.mean_CDI_I <- svyglm(Word_Production ~ as.factor(Age_months), design =  CDI_I_svy)
+
+anov.mean_CDI_I <- aov(glm.mean_CDI_I)
+
+summary(anov.mean_CDI_I)
+
+#CDI_I- WC
+
+mean_CDI_I_b <- round(svyby(~ Word_Comprehension, ~Age_months, CDI_I_svy, svymean,quantiles=0.5,ci=TRUE,vartype="ci"), digits =0)
+
+write.csv(mean_CDI_I_b, "mean_CDI_I_b.csv")
+
+glm.mean_CDI_I_b <- svyglm(Word_Comprehension ~ as.factor(Age_months), design =  CDI_I_svy)
+
+anov.mean_CDI_I_b <- aov(glm.mean_CDI_I_b)
+
+summary(anov.mean_CDI_I_b)
+
+#CDI_II- WP
+
+mean_CDI_II <- round(svyby(~ Word_Production, ~Age_months, CDI_II_svy, svymean,quantiles=0.5,ci=TRUE,vartype="ci"), digits =0)
+
+write.csv(mean_CDI_II, "mean_CDI_II.csv")
+
+glm.mean_CDI_II <- svyglm(Word_Production ~ as.factor(Age_months), design =  CDI_II_svy)
+
+anov.mean_CDI_II <- aov(glm.mean_CDI_II)
+
+summary(anov.mean_CDI_II)
+
+
+#CDI_III- WP
+
+mean_CDI_III <- round(svyby(~ Word_Production, ~Age_months, CDI_III_svy, svymean,quantiles=0.5,ci=TRUE,vartype="ci"), digits =0)
+
+write.csv(mean_CDI_III, "mean_CDI_III.csv")
+
+glm.mean_CDI_III <- svyglm(Word_Production ~ as.factor(Age_months), design =  CDI_III_svy)
+
+anov.mean_CDI_III <- aov(glm.mean_CDI_III)
+
+summary(anov.mean_CDI_III)
+
+```
+
+```{r graphs with CDI scores}
+
+#for CDI_1
+
+#word production
+
+score_CDI_I <- CDI_I %>%  as_survey_design(ids = upm, strata= estrato, nest=TRUE,weights = fexp)
+
+mean_score_CDI_I <- score_CDI_I %>% group_by(Age_months) %>% summarise(Mean_score =  round(survey_mean (Word_Production, vartype = "ci"), digits = 0),n = unweighted(n()))
+
+mean_score_CDI_I
+
+png("mean_score_CDI_I_pic.png ", width = 7,
+  height    = 4.5,
+  units     = "in",
+  res       = 500,
+  pointsize = 4)
+
+
+mean_score_CDI_I_pic <- ggplot(data= mean_score_CDI_I, aes(x = Age_months, y = Mean_score,  ymax = Mean_score_upp, ymin = Mean_score_low )) +
+  geom_col(stat = "identity", position = "dodge", width = 0.5, fill = "#bdbdbd") +
+  geom_errorbar(position = position_dodge(width = 0.4), width = 0.1, size = 0.8) +
+  geom_text(aes(y = 0, label = n), position = position_dodge(width = 0.9), vjust = -1, col = "black" , fontface = "bold") +scale_x_discrete(limits= c(12,13,14,15,16,17,18) )  + 
+  scale_y_continuous(limits = c(0,50))  +
+  labs(title = "Mean Word_Production scores (12-18 months)", x = "Age in months", y ="Mean scores", caption = "**p-value  for ANOVA,  <0.05")  + my_theme
+  
+
+
+mean_score_CDI_I_pic 
+
+
+dev.off()
+
+#for word comprehension
+
+score_CDI_I_b<- CDI_I%>%  as_survey_design(ids = upm, strata= estrato, nest=TRUE,weights = fexp)
+
+mean_score_CDI_I_b<- score_CDI_I_b %>% group_by(Age_months) %>% summarise(Mean_score =  round(survey_mean (Word_Comprehension, vartype = "ci"), digits = 0),n = unweighted(n()))
+
+mean_score_CDI_I_b
+
+png("mean_score_CDI_I_b_pic.png ", width = 7,
+  height    = 4.5,
+  units     = "in",
+  res       = 500,
+  pointsize = 4)
+
+
+mean_score_CDI_I_b_pic <- ggplot(data= mean_score_CDI_I_b, aes(x = Age_months, y = Mean_score,  ymax = Mean_score_upp, ymin = Mean_score_low )) +
+  geom_col(stat = "identity", position = "dodge", width = 0.5, fill = "#bdbdbd") +
+  geom_errorbar(position = position_dodge(width = 0.4), width = 0.1, size = 0.8) +
+  geom_text(aes(y = 0, label = n), position = position_dodge(width = 0.9), vjust = -1, col = "black" , fontface = "bold") +scale_x_discrete(limits= c(12,13,14,15,16,17,18) )  + 
+  scale_y_continuous(limits = c(0,50))  +
+  labs(title = "Mean Word_Comprehension scores  (12-18 months)", x = "Age in months", y ="Mean  scores",  caption = "**p-value  for ANOVA,  <0.05")  + my_theme
+  
+
+
+mean_score_CDI_I_b_pic 
+
+
+dev.off()
+
+
+#for CDI_2
+
+#word production
+
+score_CDI_II <- CDI_II %>%  as_survey_design(ids = upm, strata= estrato, nest=TRUE,weights = fexp)
+
+mean_score_CDI_II <- score_CDI_II %>% group_by(Age_months) %>% summarise(Mean_score =  round(survey_mean (Word_Production, vartype = "ci"), digits = 0),n = unweighted(n()))
+
+mean_score_CDI_II
+
+png("mean_score_CDI_II_pic.png ", width = 7,
+  height    = 4.5,
+  units     = "in",
+  res       = 500,
+  pointsize = 4)
+
+
+mean_score_CDI_II_pic <- ggplot(data= mean_score_CDI_II, aes(x = Age_months, y = Mean_score,  ymax = Mean_score_upp, ymin = Mean_score_low )) +
+  geom_col(stat = "identity", position = "dodge", width = 0.5, fill = "#bdbdbd") +
+  geom_errorbar(position = position_dodge(width = 0.4), width = 0.1, size = 0.8) +
+  geom_text(aes(y = 0, label = n), position = position_dodge(width = 0.9), vjust = -1, col = "black" , fontface = "bold") +scale_x_discrete(limits= c(19,20,21,22,23,24,25,26,27,28,29,30) )  + 
+  scale_y_continuous(limits = c(0,50))  +
+  labs(title = "Mean Word_Production scores (19-30 months)", x = "Age in months", y ="Mean scores", caption = "**p-value  for ANOVA,  <0.05")  + my_theme
+  
+
+
+mean_score_CDI_II_pic 
+
+
+dev.off()
+
+
+
+#for CDI_3
+
+#word production
+
+score_CDI_III <- CDI_III %>%  as_survey_design(ids = upm, strata= estrato, nest=TRUE,weights = fexp)
+
+mean_score_CDI_III <- score_CDI_III %>% group_by(Age_months) %>% summarise(Mean_score =  round(survey_mean (Word_Production, vartype = "ci"), digits = 0),n = unweighted(n()))
+
+mean_score_CDI_III
+
+png("mean_score_CDI_III_pic.png ", width = 7,
+  height    = 4.5,
+  units     = "in",
+  res       = 500,
+  pointsize = 4)
+
+
+mean_score_CDI_III_pic <- ggplot(data= mean_score_CDI_III, aes(x = Age_months, y = Mean_score,  ymax = Mean_score_upp, ymin = Mean_score_low )) +
+  geom_col(stat = "identity", position = "dodge", width = 0.5, fill = "#bdbdbd") +
+  geom_errorbar(position = position_dodge(width = 0.4), width = 0.1, size = 0.8) +
+  geom_text(aes(y = 0, label = n), position = position_dodge(width = 0.9), vjust = -1, col = "black" , fontface = "bold") +scale_x_discrete(limits= c(31,32,33,34,35,36) )  + 
+  scale_y_continuous(limits = c(0,50))  +
+  labs(title = "Mean Word_Production scores (31-35 months)", x = "Age in months", y ="Mean scores", caption = "**p-value  for ANOVA,  <0.05")  + my_theme
+  
+
+
+mean_score_CDI_III_pic 
+
+
+dev.off()
+
+```
+
+
+```{r plotting the quantiles}
+
+
+#defining quantiles
+q10 <- c(0.10, 0.25,0.50,0.75,0.90)
+
+color_line <- c("#99d8c9", "#c51b8a", "#2c7fb8", "#feb24c", "#756bb1")
+
+#for CDI_I
+
+png("Percentile_CDI_I.png ", width = 7,
+  height    = 4.5,
+  units     = "in",
+  res       = 500,
+  pointsize = 4)
+
+ggplot(CDI_I, aes(Age_months, Word_Production)) + geom_quantile(method= "rq",formula=y ~ poly(x, 2), quantiles = q10, aes(linetype = as.factor(..quantile..)), color = "#2ca25f",  size = 1)+ scale_x_discrete(limits= c(12,13,14,15,16,17,18)) +
+  scale_linetype_manual(values=c("twodash", "longdash", "solid", "dotdash", "dotted"),name = "Percentiles",labels = c("10th","25th","50th","75th","90th"))+
+  labs(title = "CDI-Words Produced: 12-18 months (Fitted)", x = "Age in months", y = "Words Produced")+ my_theme2
+
+dev.off()
+
+
+#for CDI_I
+
+png("Percentile_CDI_I_b.png ", width = 7,
+  height    = 4.5,
+  units     = "in",
+  res       = 500,
+  pointsize = 4)
+
+ggplot(CDI_I, aes(Age_months, Word_Comprehension)) + geom_quantile(method= "rq",formula=y ~ poly(x, 2), quantiles = q10, aes(linetype = as.factor(..quantile..)), color = "#756bb1",  size = 1)+ scale_x_discrete(limits= c(12,13,14,15,16,17,18)) +
+  scale_linetype_manual(values=c("twodash", "longdash", "solid", "dotdash", "dotted"),name = "Percentiles",labels = c("10th","25th","50th","75th","90th"))+
+  labs(title = "CDI-Words Understood: 12-18 months (Fitted)", x = "Age in months", y = "Words Understood")+ my_theme2
+
+dev.off()
+
+
+#for CDI_II
+
+png("Percentile_CDI_II.png ", width = 7,
+  height    = 4.5,
+  units     = "in",
+  res       = 500,
+  pointsize = 4)
+
+ggplot(CDI_II, aes(Age_months, Word_Production)) + geom_quantile(method= "rq",formula=y ~ poly(x, 2), quantiles = q10, aes(linetype = as.factor(..quantile..)), color = "#de2d26",  size = 1)+ scale_x_discrete(limits= c(19,20,21,22,23,24,25,26,27,28,29,30)) +
+  scale_linetype_manual(values=c("twodash", "longdash", "solid", "dotdash", "dotted"),name = "Percentiles",labels = c("10th","25th","50th","75th","90th"))+
+  labs(title = "CDI-Words Produced: 19-30 months (Fitted)", x = "Age in months", y = "Words Produced")+ my_theme2
+
+dev.off()
+
+
+#for CDI_III
+
+png("Percentile_CDI_III.png ", width = 7,
+  height    = 4.5,
+  units     = "in",
+  res       = 500,
+  pointsize = 4)
+
+ggplot(CDI_III, aes(Age_months, Word_Production)) + geom_quantile(method= "rq",formula=y ~ poly(x, 2), quantiles = q10, aes(linetype = as.factor(..quantile..)), color = "#1c9099",  size = 1)+scale_x_discrete(limits= c(31,32,33,34,35)) + 
+  scale_linetype_manual(values=c("twodash", "longdash", "solid", "dotdash", "dotted"),name = "Percentiles",labels = c("10th","25th","50th","75th","90th"))+
+  labs(title = "CDI-Words Produced: 31-35 months (Fitted)", x = "Age in months", y = "Words Produced")+ my_theme2
+
+dev.off()
+
+```
+
+
+
+```{r Home inventory scores with and without weight}
+
+##1
+
+Home_I_noweights  <- CDI_I %>% tbl_summary(by = Age_months, include = c (Home_inventory, Age_months), type = list(Home_inventory ~ 'continuous2' ),statistic = list(all_continuous() ~ c("{mean}({sd})", "{min}, {max}")))
+
+Home_I_noweights 
+
+Home_I_noweights  %>% as_gt() %>%            
+  gt::gtsave(filename = "Home_I_noweights .rtf")
+
+Home_I_weights <- CDI_I_svy %>% tbl_svysummary (by = Age_months, include = c (Home_inventory, Age_months), type = list(Home_inventory ~ 'continuous2'),statistic = list(all_continuous() ~ c("{mean}({sd})", "{min}, {max}","{N_obs}", "{N_obs_unweighted}")))
+
+Home_I_weights 
+
+Home_I_weights  %>% as_gt() %>%            
+  gt::gtsave(filename = "Home_I_weights .rtf")
+
+##2
+
+Home_II_noweights <- CDI_II %>% tbl_summary(by = Age_months, include = c (Home_inventory, Age_months), type = list(Home_inventory ~ 'continuous2'),statistic = list(all_continuous() ~ c("{mean}({sd})", "{min}, {max}")))
+
+Home_II_noweights
+
+Home_II_noweights  %>% as_gt() %>%            
+  gt::gtsave(filename = "Home_II_noweights.rtf")
+
+
+
+Home_II_weights <- CDI_II_svy %>% tbl_svysummary (by = Age_months, include = c (Home_inventory, Age_months), type = list(Home_inventory ~ 'continuous2'),statistic = list(all_continuous() ~ c("{mean}({sd})", "{min}, {max}","{N_obs}", "{N_obs_unweighted}")))
+
+Home_II_weights
+
+Home_II_weights  %>% as_gt() %>%            
+  gt::gtsave(filename = "Home_II_weights .rtf")
+
+##3
+
+Home_III_noweights <- CDI_III %>% tbl_summary(by = Age_months, include = c (Home_inventory, Age_months), type = list(Home_inventory ~ 'continuous2'),statistic = list(all_continuous() ~ c("{mean}({sd})", "{min}, {max}")))
+
+Home_III_noweights
+
+Home_III_noweights  %>% as_gt() %>%            
+  gt::gtsave(filename = "Home_III_noweights .rtf")
+
+
+Home_III_weights <- CDI_III_svy %>% tbl_svysummary (by = Age_months, include = c (Home_inventory, Age_months), type = list(Home_inventory ~ 'continuous2'),statistic = list(all_continuous() ~ c("{mean}({sd})", "{min}, {max}","{N_obs}", "{N_obs_unweighted}")))
+
+Home_III_weights 
+
+Home_III_weights  %>% as_gt() %>%            
+  gt::gtsave(filename = "Home_III_weights .rtf")
+```
+
+```{r 95% CI and p values to check for difference in mean(home_inv)}
+
+#svyby: Survey statistics on subsets
+#getting p-value using anova
+
+#CDI_I- Home
+
+mean_Home_I <- round(svyby(~ Home_inventory, ~Age_months, CDI_I_svy, svymean,quantiles=0.5,ci=TRUE,vartype="ci"), digits =0)
+
+write.csv(mean_Home_I, "mean_Home_I.csv")
+
+glm.mean_Home_I <- svyglm(Home_inventory ~ as.factor(Age_months), design =  CDI_I_svy)
+
+anov.mean_Home_I <- aov(glm.mean_Home_I)
+
+summary(anov.mean_Home_I)
+
+#CDI_II- Home
+
+mean_Home_II <- round(svyby(~ Home_inventory, ~Age_months, CDI_II_svy, svymean,quantiles=0.5,ci=TRUE,vartype="ci"), digits =0)
+
+write.csv(mean_Home_II, "mean_Home_II.csv")
+
+glm.mean_Home_II <- svyglm(Home_inventory ~ as.factor(Age_months), design =  CDI_II_svy)
+
+anov.mean_Home_II <- aov(glm.mean_Home_II)
+
+summary(anov.mean_Home_II)
+
+
+#CDI_III- Home
+
+mean_Home_III <- round(svyby(~ Home_inventory, ~Age_months, CDI_III_svy, svymean,quantiles=0.5,ci=TRUE,vartype="ci"), digits =0)
+
+write.csv(mean_Home_III, "mean_Home_III.csv")
+
+glm.mean_Home_III <- svyglm(Home_inventory ~ as.factor(Age_months), design =  CDI_III_svy)
+
+anov.mean_Home_III <- aov(glm.mean_Home_III)
+
+summary(anov.mean_Home_III)
+
+```
+
+
+```{r graphs with  HOME scores }
+
+
+#for HOME_1
+
+#Home_scores
+
+score_HOME_I <- CDI_I %>%  as_survey_design(ids = upm, strata= estrato, nest=TRUE,weights = fexp)
+
+mean_score_HOME_I <- score_HOME_I %>% group_by(Age_months) %>% summarise(Mean_score =  round(survey_mean (Home_inventory, vartype = "ci"), digits = 0),n = unweighted(n()))
+
+mean_score_HOME_I
+
+png("mean_score_HOME_I_pic.png ", width = 7,
+  height    = 4.5,
+  units     = "in",
+  res       = 500,
+  pointsize = 4)
+
+
+mean_score_HOME_I_pic <- ggplot(data= mean_score_HOME_I, aes(x = Age_months, y = Mean_score,  ymax = Mean_score_upp, ymin = Mean_score_low )) +
+  geom_col(stat = "identity", position = "dodge", width = 0.5, fill = "#bdbdbd") +
+  geom_errorbar(position = position_dodge(width = 0.4), width = 0.1, size = 0.8) +
+  geom_text(aes(y = 0, label = n), position = position_dodge(width = 0.9), vjust = -1, col = "black" , fontface = "bold") +scale_x_discrete(limits= c(12,13,14,15,16,17,18) )  + 
+  scale_y_continuous(limits = c(0,50))  +
+  labs(title = "Mean Home_inventory scores (12-18 months)", x = "Age in months", y ="Mean scores", caption = "**p-value  for ANOVA,  <0.05")  + my_theme
+  
+
+
+mean_score_HOME_I_pic 
+
+
+dev.off()
+
+
+
+#for CDI_2
+
+#Home_scores
+
+score_HOME_II <- CDI_II %>%  as_survey_design(ids = upm, strata= estrato, nest=TRUE,weights = fexp)
+
+mean_score_HOME_II <- score_HOME_II %>% group_by(Age_months) %>% summarise(Mean_score =  round(survey_mean (Home_inventory, vartype = "ci"), digits = 0),n = unweighted(n()))
+
+mean_score_HOME_II
+
+png("mean_score_HOME_II_pic.png ", width = 7,
+  height    = 4.5,
+  units     = "in",
+  res       = 500,
+  pointsize = 4)
+
+
+mean_score_HOME_II_pic <- ggplot(data= mean_score_HOME_II, aes(x = Age_months, y = Mean_score,  ymax = Mean_score_upp, ymin = Mean_score_low )) +
+  geom_col(stat = "identity", position = "dodge", width = 0.5, fill = "#bdbdbd") +
+  geom_errorbar(position = position_dodge(width = 0.4), width = 0.1, size = 0.8) +
+  geom_text(aes(y = 0, label = n), position = position_dodge(width = 0.9), vjust = -1, col = "black" , fontface = "bold") +scale_x_discrete(limits= c(19,20,21,22,23,24,25,26,27,28,29,30))  + 
+  scale_y_continuous(limits = c(0,50))  +
+  labs(title = "Mean Home_inventory scores (19-30 months)", x = "Age in months", y ="Mean scores", caption = "**p-value  for ANOVA,  <0.05")  + my_theme
+  
+
+
+mean_score_HOME_II_pic 
+
+
+dev.off()
+
+
+
+#for CDI_3
+
+#Home_scores
+
+score_HOME_III <- CDI_III %>%  as_survey_design(ids = upm, strata= estrato, nest=TRUE,weights = fexp)
+
+mean_score_HOME_III <- score_HOME_III %>% group_by(Age_months) %>% summarise(Mean_score =  round(survey_mean (Home_inventory, vartype = "ci"), digits = 0),n = unweighted(n()))
+
+mean_score_HOME_III
+
+png("mean_score_HOME_III_pic.png ", width = 7,
+  height    = 4.5,
+  units     = "in",
+  res       = 500,
+  pointsize = 4)
+
+
+mean_score_HOME_III_pic <- ggplot(data= mean_score_HOME_III, aes(x = Age_months, y = Mean_score,  ymax = Mean_score_upp, ymin = Mean_score_low )) +
+  geom_col(stat = "identity", position = "dodge", width = 0.5, fill = "#bdbdbd") +
+  geom_errorbar(position = position_dodge(width = 0.4), width = 0.1, size = 0.8) +
+  geom_text(aes(y = 0, label = n), position = position_dodge(width = 0.9), vjust = -1, col = "black" , fontface = "bold") +scale_x_discrete(limits= c(31,32,33,34,35,36) )  + 
+  scale_y_continuous(limits = c(0,50))  +
+  labs(title = "Mean Home_inventory scores (31-35 months)", x = "Age in months", y ="Mean scores", caption = "**p-value  for ANOVA,  <0.05")  + my_theme
+  
+
+
+mean_score_HOME_III_pic 
+
+
+dev.off()
+
+```
+
+
+```{r anova to check for significance in mean differnce of CDI scores based on home score categories}
+
+#CDI_I WC
+glm.mean_Home_WC_I <- svyglm(Word_Comprehension ~ Home_score_cat, design =  CDI_I_svy)
+
+anov.mean_Home_WC_I <- aov(glm.mean_Home_WC_I)
+
+summary(anov.mean_Home_WC_I)
+
+#CDI_I WP
+glm.mean_Home_WC_I_b <- svyglm(Word_Production ~ Home_score_cat, design =  CDI_I_svy)
+
+anov.mean_Home_WC_I_b <- aov(glm.mean_Home_WC_I_b)
+
+summary(anov.mean_Home_WC_I_b)
+
+
+#CDI_II WP
+
+
+glm.mean_Home_WC_II <- svyglm(Word_Production ~ Home_score_cat, design =  CDI_II_svy)
+
+anov.mean_Home_WC_II <- aov(glm.mean_Home_WC_II)
+
+summary(anov.mean_Home_WC_II)
+
+#CDI_III WP
+
+
+glm.mean_Home_WC_III <- svyglm(Word_Production ~ Home_score_cat, design =  CDI_III_svy)
+
+anov.mean_Home_WC_III <- aov(glm.mean_Home_WC_III)
+
+summary(anov.mean_Home_WC_III)
+
+
+```
+
+
+```{r graph for mean CDI scores by HOME }
+
+#CDI_I - WP
+
+score_CDI_I <- CDI_I %>%  as_survey_design(ids = upm, strata= estrato, nest=TRUE,weights = fexp)
+
+mean_score_CDI_I_by_home <- score_CDI_I %>% group_by(Home_score_cat) %>% summarise(Mean_score =  round(survey_mean (Word_Production, vartype = "ci"), digits = 0),n = unweighted(n()))
+
+mean_score_CDI_I_by_home
+
+png("mean_score_CDI_I_by_home_pic.png ", width = 7,
+  height    = 4.5,
+  units     = "in",
+  res       = 500,
+  pointsize = 4)
+
+mean_score_CDI_I_by_home_pic <- ggplot(data= mean_score_CDI_I_by_home, aes(x = Home_score_cat, y = Mean_score,  ymax = Mean_score_upp, ymin = Mean_score_low )) +
+  geom_col(stat = "identity", position = "dodge", width = 0.5, fill = "#a6bddb") +
+  geom_errorbar(position = position_dodge(width = 0.4), width = 0.1, size = 0.8) +
+  geom_text(aes(y = 0, label = n), position = position_dodge(width = 0.9), vjust = -1, col = "black" , fontface = "bold") + 
+  scale_y_continuous(limits = c(0,50))+
+  labs(title = "Mean Word_Production scores (12-18 months)", x = "Home score categories", y ="Mean scores", caption = "**p-value  for ANOVA,  <0.05")  + my_theme
+  
+
+
+mean_score_CDI_I_by_home_pic 
+
+
+dev.off()
+
+#CDI_I- WC
+
+score_CDI_I <- CDI_I %>%  as_survey_design(ids = upm, strata= estrato, nest=TRUE,weights = fexp)
+
+mean_score_CDI_I_b_by_home <- score_CDI_I %>% group_by(Home_score_cat) %>% summarise(Mean_score =  round(survey_mean (Word_Comprehension, vartype = "ci"), digits = 0),n = unweighted(n()))
+
+mean_score_CDI_I_b_by_home
+
+png("mean_score_CDI_I_b_by_home_pic.png ", width = 7,
+  height    = 4.5,
+  units     = "in",
+  res       = 500,
+  pointsize = 4)
+
+mean_score_CDI_I_b_by_home_pic <- ggplot(data= mean_score_CDI_I_b_by_home, aes(x = Home_score_cat, y = Mean_score,  ymax = Mean_score_upp, ymin = Mean_score_low )) +
+  geom_col(stat = "identity", position = "dodge", width = 0.5, fill = "#a6bddb") +
+  geom_errorbar(position = position_dodge(width = 0.4), width = 0.1, size = 0.8) +
+  geom_text(aes(y = 0, label = n), position = position_dodge(width = 0.9), vjust = -1, col = "black" , fontface = "bold") + 
+  scale_y_continuous(limits = c(0,50))+
+  labs(title = "Mean Word_Comprehension scores (12-18 months)", x = "Home score categories", y ="Mean scores", caption = "**p-value  for ANOVA,  <0.05")  + my_theme
+  
+
+
+mean_score_CDI_I_b_by_home_pic 
+
+
+dev.off()
+
+#CDI_II - WP
+
+score_CDI_II <- CDI_II %>%  as_survey_design(ids = upm, strata= estrato, nest=TRUE,weights = fexp)
+
+mean_score_CDI_II_by_home <- score_CDI_II %>% group_by(Home_score_cat) %>% summarise(Mean_score =  round(survey_mean (Word_Production, vartype = "ci"), digits = 0),n = unweighted(n()))
+
+mean_score_CDI_II_by_home
+
+png("mean_score_CDI_II_by_home_pic.png ", width = 7,
+  height    = 4.5,
+  units     = "in",
+  res       = 500,
+  pointsize = 4)
+
+mean_score_CDI_II_by_home_pic <- ggplot(data= mean_score_CDI_II_by_home, aes(x = Home_score_cat, y = Mean_score,  ymax = Mean_score_upp, ymin = Mean_score_low )) +
+  geom_col(stat = "identity", position = "dodge", width = 0.5, fill = "#a6bddb") +
+  geom_errorbar(position = position_dodge(width = 0.4), width = 0.1, size = 0.8) +
+  geom_text(aes(y = 0, label = n), position = position_dodge(width = 0.9), vjust = -1, col = "black" , fontface = "bold") + 
+  scale_y_continuous(limits = c(0,50))+
+  labs(title = "Mean Word_Production scores (19-30 months)", x = "Home score categories", y ="Mean scores", caption = "**p-value  for ANOVA,  <0.05")  + my_theme
+  
+
+
+mean_score_CDI_II_by_home_pic 
+
+
+dev.off()
+
+#CDI_III - WP
+
+score_CDI_III <- CDI_III %>%  as_survey_design(ids = upm, strata= estrato, nest=TRUE,weights = fexp)
+
+mean_score_CDI_III_by_home <- score_CDI_III %>% group_by(Home_score_cat) %>% summarise(Mean_score =  round(survey_mean (Word_Production, vartype = "ci"), digits = 0),n = unweighted(n()))
+
+mean_score_CDI_III_by_home
+
+png("mean_score_CDI_III_by_home_pic.png ", width = 7,
+  height    = 4.5,
+  units     = "in",
+  res       = 500,
+  pointsize = 4)
+
+mean_score_CDI_III_by_home_pic <- ggplot(data= mean_score_CDI_III_by_home, aes(x = Home_score_cat, y = Mean_score,  ymax = Mean_score_upp, ymin = Mean_score_low )) +
+  geom_col(stat = "identity", position = "dodge", width = 0.5, fill = "#a6bddb") +
+  geom_errorbar(position = position_dodge(width = 0.4), width = 0.1, size = 0.8) +
+  geom_text(aes(y = 0, label = n), position = position_dodge(width = 0.9), vjust = -1, col = "black" , fontface = "bold") + 
+  scale_y_continuous(limits = c(0,50))+
+  labs(title = "Mean Word_Production scores (31-35 months)", x = "Home score categories", y ="Mean scores", caption = "**p-value  for ANOVA,  <0.05")  + my_theme
+  
+
+
+mean_score_CDI_III_by_home_pic 
+
+
+dev.off()
+
+```
+
+
+
+```{r anova to check for significance in mean differnce of CDI scores based on mother_edu categories}
+
+#CDI_I WC
+glm.mean_edu_WC_I <- svyglm(Word_Comprehension ~ mother_edu_cat, design =  CDI_I_svy)
+
+anov.mean_edu_WC_I <- aov(glm.mean_edu_WC_I)
+
+summary(anov.mean_edu_WC_I)
+
+#CDI_I WP
+glm.mean_edu_WC_I_b <- svyglm(Word_Production ~ mother_edu_cat, design =  CDI_I_svy)
+
+anov.mean_edu_WC_I_b <- aov(glm.mean_edu_WC_I_b)
+
+summary(anov.mean_edu_WC_I_b)
+
+
+#CDI_II WP
+
+
+glm.mean_edu_WC_II <- svyglm(Word_Production ~ mother_edu_cat, design =  CDI_II_svy)
+
+anov.mean_edu_WC_II <- aov(glm.mean_edu_WC_II)
+
+summary(anov.mean_edu_WC_II)
+
+#CDI_III WP
+
+
+glm.mean_edu_WC_III <- svyglm(Word_Production ~ mother_edu_cat, design =  CDI_III_svy)
+
+anov.mean_edu_WC_III <- aov(glm.mean_edu_WC_III)
+
+summary(anov.mean_edu_WC_III)
+
+
+```
+
+
+
+```{r graph for mean CDI scores by maternal_education }
+
+#CDI_I - WP
+
+score_CDI_I <- CDI_I %>%  as_survey_design(ids = upm, strata= estrato, nest=TRUE,weights = fexp)
+
+mean_score_CDI_I_by_edu <- score_CDI_I %>% group_by(mother_edu_cat) %>% summarise(Mean_score =  round(survey_mean (Word_Production, vartype = "ci"), digits = 0),n = unweighted(n()))
+
+mean_score_CDI_I_by_edu
+
+png("mean_score_CDI_I_by_edu_pic.png ", width = 7,
+  height    = 4.5,
+  units     = "in",
+  res       = 500,
+  pointsize = 4)
+
+mean_score_CDI_I_by_edu_pic <- ggplot(data= mean_score_CDI_I_by_edu, aes(x = mother_edu_cat, y = Mean_score,  ymax = Mean_score_upp, ymin = Mean_score_low )) +
+  geom_col(stat = "identity", position = "dodge", width = 0.5, fill = "#fc9272") +
+  geom_errorbar(position = position_dodge(width = 0.4), width = 0.1, size = 0.8) +
+  geom_text(aes(y = 0, label = n), position = position_dodge(width = 0.9), vjust = -1, col = "black" , fontface = "bold") + 
+  scale_y_continuous(limits = c(0,50))+
+  labs(title = "Mean Word_Production scores (12-18 months)", x = "Mother's education level", y ="Mean scores", caption = "**p-value  for ANOVA,  <0.05")  + my_theme
+  
+
+
+mean_score_CDI_I_by_edu_pic 
+
+
+dev.off()
+
+#CDI_I- WC
+
+score_CDI_I <- CDI_I %>%  as_survey_design(ids = upm, strata= estrato, nest=TRUE,weights = fexp)
+
+mean_score_CDI_I_b_by_edu <- score_CDI_I %>% group_by(mother_edu_cat) %>% summarise(Mean_score =  round(survey_mean (Word_Comprehension, vartype = "ci"), digits = 0),n = unweighted(n()))
+
+mean_score_CDI_I_b_by_edu
+
+png("mean_score_CDI_I_b_by_edu_pic.png ", width = 7,
+  height    = 4.5,
+  units     = "in",
+  res       = 500,
+  pointsize = 4)
+
+mean_score_CDI_I_b_by_edu_pic <- ggplot(data= mean_score_CDI_I_b_by_edu, aes(x = mother_edu_cat, y = Mean_score,  ymax = Mean_score_upp, ymin = Mean_score_low )) +
+  geom_col(stat = "identity", position = "dodge", width = 0.5, fill = "#fc9272") +
+  geom_errorbar(position = position_dodge(width = 0.4), width = 0.1, size = 0.8) +
+  geom_text(aes(y = 0, label = n), position = position_dodge(width = 0.9), vjust = -1, col = "black" , fontface = "bold") + 
+  scale_y_continuous(limits = c(0,50))+
+  labs(title = "Mean Word_Comprehension scores (12-18 months)", x = "Mother's education level", y ="Mean scores", caption = "**p-value  for ANOVA,  <0.05")  + my_theme
+  
+
+
+mean_score_CDI_I_b_by_edu_pic 
+
+
+dev.off()
+
+#CDI_II - WP
+
+score_CDI_II <- CDI_II %>%  as_survey_design(ids = upm, strata= estrato, nest=TRUE,weights = fexp)
+
+mean_score_CDI_II_by_edu <- score_CDI_II %>% group_by(mother_edu_cat) %>% summarise(Mean_score =  round(survey_mean (Word_Production, vartype = "ci"), digits = 0),n = unweighted(n()))
+
+mean_score_CDI_II_by_edu
+
+png("mean_score_CDI_II_by_edu_pic.png ", width = 7,
+  height    = 4.5,
+  units     = "in",
+  res       = 500,
+  pointsize = 4)
+
+mean_score_CDI_II_by_edu_pic <- ggplot(data= mean_score_CDI_II_by_edu, aes(x = mother_edu_cat, y = Mean_score,  ymax = Mean_score_upp, ymin = Mean_score_low )) +
+  geom_col(stat = "identity", position = "dodge", width = 0.5, fill = "#fc9272") +
+  geom_errorbar(position = position_dodge(width = 0.4), width = 0.1, size = 0.8) +
+  geom_text(aes(y = 0, label = n), position = position_dodge(width = 0.9), vjust = -1, col = "black" , fontface = "bold") + 
+  scale_y_continuous(limits = c(0,50))+
+  labs(title = "Mean Word_Production scores (19-30 months)", x = "Mother's education level", y ="Mean scores", caption = "**p-value  for ANOVA,  <0.05")  + my_theme
+  
+
+
+mean_score_CDI_II_by_edu_pic 
+
+
+dev.off()
+
+#CDI_III - WP
+
+score_CDI_III <- CDI_III %>%  as_survey_design(ids = upm, strata= estrato, nest=TRUE,weights = fexp)
+
+mean_score_CDI_III_by_edu <- score_CDI_III %>% group_by(mother_edu_cat) %>% summarise(Mean_score =  round(survey_mean (Word_Production, vartype = "ci"), digits = 0),n = unweighted(n()))
+
+mean_score_CDI_III_by_edu
+
+png("mean_score_CDI_III_by_edu_pic.png ", width = 7,
+  height    = 4.5,
+  units     = "in",
+  res       = 500,
+  pointsize = 4)
+
+mean_score_CDI_III_by_edu_pic <- ggplot(data= mean_score_CDI_III_by_edu, aes(x = mother_edu_cat, y = Mean_score,  ymax = Mean_score_upp, ymin = Mean_score_low )) +
+  geom_col(stat = "identity", position = "dodge", width = 0.5, fill = "#fc9272") +
+  geom_errorbar(position = position_dodge(width = 0.4), width = 0.1, size = 0.8) +
+  geom_text(aes(y = 0, label = n), position = position_dodge(width = 0.9), vjust = -1, col = "black" , fontface = "bold") + 
+  scale_y_continuous(limits = c(0,50))+
+  labs(title = "Mean Word_Production scores (31-35 months)", x = "Mother's education level", y ="Mean scores", caption = "**p-value  for ANOVA,  <0.05")  + my_theme
+  
+
+
+mean_score_CDI_III_by_edu_pic 
+
+
+dev.off()
+
+```
+
+
+```{r anova to check for significance in mean differnce of HOME scores based on mother - edu categories}
+
+#CDI_I edu
+glm.mean_Home_edu_I <- svyglm(Home_inventory ~ mother_edu_cat, design =  CDI_I_svy)
+
+anov.mean_Home_edu_I <- aov(glm.mean_Home_edu_I)
+
+summary(anov.mean_Home_edu_I)
+
+
+
+
+#CDI_II edu
+
+
+glm.mean_Home_edu_II <- svyglm(Home_inventory ~ mother_edu_cat, design =  CDI_II_svy)
+
+anov.mean_Home_edu_II <- aov(glm.mean_Home_edu_II)
+
+summary(anov.mean_Home_edu_II)
+
+#CDI_III edu
+
+
+glm.mean_Home_edu_III <- svyglm(Home_inventory ~ mother_edu_cat, design =  CDI_III_svy)
+
+anov.mean_Home_edu_III <- aov(glm.mean_Home_edu_III)
+
+summary(anov.mean_Home_edu_III)
+
+
+```
+
+
+
+```{r graph to get HOME scores separated by mother edu categories}
+
+#CDI_I - home
+
+score_CDI_I <- CDI_I %>%  as_survey_design(ids = upm, strata= estrato, nest=TRUE,weights = fexp)
+
+mean_score_HOME_I_by_edu <- score_CDI_I %>% group_by(mother_edu_cat) %>% summarise(Mean_score =  round(survey_mean (Home_inventory, vartype = "ci"), digits = 0),n = unweighted(n()))
+
+mean_score_HOME_I_by_edu
+
+png("mean_score_HOME_I_by_edu_pic.png ", width = 7,
+  height    = 4.5,
+  units     = "in",
+  res       = 500,
+  pointsize = 4)
+
+mean_score_HOME_I_by_edu_pic <- ggplot(data= mean_score_HOME_I_by_edu, aes(x = mother_edu_cat, y = Mean_score,  ymax = Mean_score_upp, ymin = Mean_score_low )) +
+  geom_col(stat = "identity", position = "dodge", width = 0.5, fill = "#a1d99b") +
+  geom_errorbar(position = position_dodge(width = 0.4), width = 0.1, size = 0.8) +
+  geom_text(aes(y = 0, label = n), position = position_dodge(width = 0.9), vjust = -1, col = "black" , fontface = "bold") + 
+  scale_y_continuous(limits = c(0,50))+
+  labs(title = "Mean Home_inventory scores (12-18 months)", x = "Mother's education level", y ="Mean scores", caption = "**p-value  for ANOVA,  <0.05")  + my_theme
+  
+
+
+mean_score_HOME_I_by_edu_pic 
+
+
+dev.off()
+
+
+#CDI_II - home
+
+score_CDI_II <- CDI_II %>%  as_survey_design(ids = upm, strata= estrato, nest=TRUE,weights = fexp)
+
+mean_score_HOME_II_by_edu <- score_CDI_II %>% group_by(mother_edu_cat) %>% summarise(Mean_score =  round(survey_mean (Home_inventory, vartype = "ci"), digits = 0),n = unweighted(n()))
+
+mean_score_HOME_II_by_edu
+
+png("mean_score_HOME_II_by_edu_pic.png ", width = 7,
+  height    = 4.5,
+  units     = "in",
+  res       = 500,
+  pointsize = 4)
+
+mean_score_HOME_II_by_edu_pic <- ggplot(data= mean_score_HOME_II_by_edu, aes(x = mother_edu_cat, y = Mean_score,  ymax = Mean_score_upp, ymin = Mean_score_low )) +
+  geom_col(stat = "identity", position = "dodge", width = 0.5, fill = "#a1d99b") +
+  geom_errorbar(position = position_dodge(width = 0.4), width = 0.1, size = 0.8) +
+  geom_text(aes(y = 0, label = n), position = position_dodge(width = 0.9), vjust = -1, col = "black" , fontface = "bold") + 
+  scale_y_continuous(limits = c(0,50))+
+  labs(title = "Mean Home_inventory scores (19-30 months)", x = "Mother's education level", y ="Mean scores", caption = "**p-value  for ANOVA,  <0.05")  + my_theme
+  
+
+
+mean_score_HOME_II_by_edu_pic 
+
+
+dev.off()
+
+#CDI_III - home
+
+score_CDI_III <- CDI_III %>%  as_survey_design(ids = upm, strata= estrato, nest=TRUE,weights = fexp)
+
+mean_score_HOME_III_by_edu <- score_CDI_III %>% group_by(mother_edu_cat) %>% summarise(Mean_score =  round(survey_mean (Home_inventory, vartype = "ci"), digits = 0),n = unweighted(n()))
+
+mean_score_HOME_III_by_edu
+
+png("mean_score_HOME_III_by_edu_pic.png ", width = 7,
+  height    = 4.5,
+  units     = "in",
+  res       = 500,
+  pointsize = 4)
+
+mean_score_HOME_III_by_edu_pic <- ggplot(data= mean_score_HOME_III_by_edu, aes(x = mother_edu_cat, y = Mean_score,  ymax = Mean_score_upp, ymin = Mean_score_low )) +
+  geom_col(stat = "identity", position = "dodge", width = 0.5, fill = "#a1d99b") +
+  geom_errorbar(position = position_dodge(width = 0.4), width = 0.1, size = 0.8) +
+  geom_text(aes(y = 0, label = n), position = position_dodge(width = 0.9), vjust = -1, col = "black" , fontface = "bold") + 
+  scale_y_continuous(limits = c(0,50))+
+  labs(title = "Mean Home_inventory scores (31-35 months)", x = "Mother's education level", y ="Mean scores", caption = "**p-value  for ANOVA,  <0.05")  + my_theme
+  
+
+
+mean_score_HOME_III_by_edu_pic 
+
+
+dev.off()
+
+
+```
+
+
+
+```{r checking correlation coefficients - CDI_I}
+
+#btw home, maternal & lang scores
+
+wtd.cor(CDI_I$Word_Production, CDI_I$Home_inventory, weight = CDI_I$fexp)
+
+#correlation    std.err  t.value      p.value
+#Y   0.1655823 0.02269067 7.297374 4.300248e-13
+
+
+wtd.cor(CDI_I$Word_Comprehension, CDI_I$Home_inventory, weight = CDI_I$fexp)
+
+
+#correlation    std.err  t.value      p.value
+#   0.1196037 0.02284311 5.235874 1.824975e-07
+
+wtd.cor(CDI_I$Word_Production, CDI_I$Age_months, weight = CDI_I$fexp)
+
+#correlation    std.err  t.value      p.value
+#   0.2232325 0.02242766 9.953445 8.767687e-23
+
+wtd.cor(CDI_I$Word_Comprehension, CDI_I$Age_months, weight = CDI_I$fexp)
+
+#correlation    std.err  t.value      p.value
+#   0.1886192 0.02259528 8.347727 1.326724e-16
+
+
+wtd.cor(CDI_I$Word_Comprehension, CDI_I$Word_Production, weight = CDI_I$fexp)
+
+
+#correlation   std.err  t.value      p.value
+#  0.4560677 0.0204761 22.27317 8.932347e-98
+
+weightedCorr(CDI_I$Word_Production, CDI_I$mother_edu, weights = CDI_I$fexp, method = "Spearman")
+#0.05714937
+
+#checking for significance with unweighted data
+
+cor.test(CDI_I$Word_Production, as.numeric(CDI_I$mother_edu), method = "spearman", exact = FALSE)
+
+#value= 0.030, p-value: 0.1869
+
+weightedCorr(CDI_I$Word_Comprehension, CDI_I$mother_edu, weights = CDI_I$fexp, method = "Spearman")
+
+#0.05905818
+
+#checking for significance with unweighted data
+
+cor.test(CDI_I$Word_Comprehension, as.numeric(CDI_I$mother_edu), method = "spearman", exact = FALSE)
+
+#value= 0.0516 , p-value: 0.024
+
+
+weightedCorr(CDI_I$Home_inventory, CDI_I$mother_edu, weights = CDI_I$fexp, method = "Spearman")
+
+#0.3456489
+
+#checking for significance with unweighted data
+
+cor.test(CDI_I$Home_inventory, as.numeric(CDI_I$mother_edu), method = "spearman", exact = FALSE)
+
+#value= 0.3423, p-value: < 2.2e-16
+
+```
+
+
+```{r checking correlation coefficients - CDI_II}
+
+#btw home, maternal & lang scores
+
+
+wtd.cor(CDI_II$Word_Production, CDI_II$Home_inventory, weight = CDI_II$fexp)
+
+#correlation    std.err  t.value      p.value
+# 0.2358036 0.01739802 13.55347 1.049236e-40
+
+wtd.cor(CDI_II$Word_Production, CDI_II$Age_months, weight = CDI_II$fexp)
+
+#correlation    std.err  t.value       p.value
+ #  0.4353126 0.01611759 27.00855 1.488013e-144
+
+weightedCorr(CDI_II$Word_Production, CDI_II$mother_edu, weights = CDI_II$fexp, method = "Spearman")
+
+#0.07054599
+
+#checking for significance with unweighted data
+
+cor.test(CDI_II$Word_Production, as.numeric(CDI_II$mother_edu), method = "spearman", exact = FALSE)
+
+#value= 0.04978844, p-value: 0.005394
+
+
+
+weightedCorr(CDI_II$Home_inventory, CDI_II$mother_edu, weights = CDI_II$fexp, method = "Spearman")
+
+# 0.3674831
+
+#checking for significance with unweighted data
+
+cor.test(CDI_II$Home_inventory, as.numeric(CDI_II$mother_edu), method = "spearman", exact = FALSE)
+
+#value= 0.371 , p-value: < 2.2e-16
+
+```
+
+
+```{r checking correlation coefficients - CDI_III}
+
+#btw home, maternal & lang scores
+
+
+wtd.cor(CDI_III$Word_Production, CDI_III$Home_inventory, weight = CDI_III$fexp)
+
+#correlation    std.err  t.value      p.value
+# 0.2651801 0.02561425 10.35283 2.902718e-24
+
+
+wtd.cor(CDI_III$Word_Production, CDI_III$Age_months, weight = CDI_III$fexp)
+
+# correlation    std.err  t.value      p.value
+#  0.1030066 0.02642401 3.898219 0.0001014313
+ 
+
+weightedCorr(CDI_III$Word_Production, CDI_III$mother_edu, weights = CDI_III$fexp, method = "Spearman")
+
+# 0.1350709
+
+#checking for significance with unweighted data
+
+cor.test(CDI_III$Word_Production, as.numeric(CDI_III$mother_edu), method = "spearman", exact = FALSE)
+
+#value= 0.12190, p-value: 4.118e-06
+
+
+
+weightedCorr(CDI_III$Home_inventory, CDI_III$mother_edu, weights = CDI_III$fexp, method = "Spearman")
+
+# 0.3752119
+
+#checking for significance with unweighted data
+
+cor.test(CDI_III$Home_inventory, as.numeric(CDI_III$mother_edu), method = "spearman", exact = FALSE)
+
+#value= 0.37604 , p-value: < 2.2e-16
+
+```
+
+
+
+```{r checking correlation between maternal edu and each HOME subscale }
+
+#CDI_I
+
+weightedCorr(CDI_I$scale_1_org, CDI_I$mother_edu, weights = CDI_I$fexp, method = "Spearman")
+
+# 0.3087533
+
+#checking for significance with unweighted data
+
+cor.test(CDI_I$scale_1_org, as.numeric(CDI_I$mother_edu), method = "spearman", exact = FALSE)
+
+#value=  0.2925776  , p-value: < 2.2e-16
+
+
+weightedCorr(CDI_I$scale_2_response, CDI_I$mother_edu, weights = CDI_I$fexp, method = "Spearman")
+# 0.1695664
+
+#checking for significance with unweighted data
+
+cor.test(CDI_I$scale_2_response, as.numeric(CDI_I$mother_edu), method = "spearman", exact = FALSE)
+
+#value=  0.1756387  , p-value: 1.442e-14
+
+
+weightedCorr(CDI_I$scale_3_acceptance, CDI_I$mother_edu, weights = CDI_I$fexp, method = "Spearman")
+#-0.05792663
+
+#checking for significance with unweighted data
+
+cor.test(CDI_I$scale_3_acceptance, as.numeric(CDI_I$mother_edu), method = "spearman", exact = FALSE)
+
+#value= -0.06899343   , p-value: 0.002684
+
+
+weightedCorr(CDI_I$scale_4_opportunity, CDI_I$mother_edu, weights = CDI_I$fexp, method = "Spearman")
+#0.167828
+
+#checking for significance with unweighted data
+
+cor.test(CDI_I$scale_4_opportunity, as.numeric(CDI_I$mother_edu), method = "spearman", exact = FALSE)
+
+#value= 0.200357  , p-value:< 2.2e-16 
+
+weightedCorr(CDI_I$scale_5_games, CDI_I$mother_edu, weights = CDI_I$fexp, method = "Spearman")
+#0.3765223
+
+#checking for significance with unweighted data
+
+cor.test(CDI_I$scale_5_games, as.numeric(CDI_I$mother_edu), method = "spearman", exact = FALSE)
+
+#value= 0.3704206  , p-value: < 2.2e-16
+
+weightedCorr(CDI_I$scale_6_mother_inv, CDI_I$mother_edu, weights = CDI_I$fexp, method = "Spearman")
+#0.2358268
+
+#checking for significance with unweighted data
+
+cor.test(CDI_I$scale_6_mother_inv, as.numeric(CDI_I$mother_edu), method = "spearman", exact = FALSE)
+
+#value= 0.2118456  , p-value: < 2.2e-16
+
+
+#CDI_II
+
+weightedCorr(CDI_II$scale_1_org, CDI_II$mother_edu, weights = CDI_II$fexp, method = "Spearman")
+
+# 0.2792572
+
+#checking for significance with unweighted data
+
+cor.test(CDI_II$scale_1_org, as.numeric(CDI_II$mother_edu), method = "spearman", exact = FALSE)
+
+#value= 0.3146906  , p-value: < 2.2e-16
+
+
+weightedCorr(CDI_II$scale_2_response, CDI_II$mother_edu, weights = CDI_II$fexp, method = "Spearman")
+#0.1712277
+
+#checking for significance with unweighted data
+
+cor.test(CDI_II$scale_2_response, as.numeric(CDI_II$mother_edu), method = "spearman", exact = FALSE)
+
+#value= 0.1580523 , p-value: < 2.2e-16
+
+
+weightedCorr(CDI_II$scale_3_acceptance, CDI_II$mother_edu, weights = CDI_II$fexp, method = "Spearman")
+#  -0.005037897
+
+#checking for significance with unweighted data
+
+cor.test(CDI_II$scale_3_acceptance, as.numeric(CDI_II$mother_edu), method = "spearman", exact = FALSE)
+
+#value= -0.02768825  , p-value: 0.1219 
+
+
+weightedCorr(CDI_II$scale_4_opportunity, CDI_II$mother_edu, weights = CDI_II$fexp, method = "Spearman")
+#0.2440058
+
+#checking for significance with unweighted data
+
+cor.test(CDI_II$scale_4_opportunity, as.numeric(CDI_II$mother_edu), method = "spearman", exact = FALSE)
+
+#value= 0.2337902  , p-value: < 2.2e-16
+
+weightedCorr(CDI_II$scale_5_games, CDI_II$mother_edu, weights = CDI_II$fexp, method = "Spearman")
+#0.385769
+
+#checking for significance with unweighted data
+
+cor.test(CDI_II$scale_5_games, as.numeric(CDI_II$mother_edu), method = "spearman", exact = FALSE)
+
+#value= 0.3929686 , p-value: < 2.2e-16
+
+weightedCorr(CDI_II$scale_6_mother_inv, CDI_II$mother_edu, weights = CDI_II$fexp, method = "Spearman")
+# 0.2318745
+
+#checking for significance with unweighted data
+
+cor.test(CDI_II$scale_6_mother_inv, as.numeric(CDI_II$mother_edu), method = "spearman", exact = FALSE)
+
+#value=  0.2411429  , p-value:  < 2.2e-16
+
+
+
+#CDI_III
+
+weightedCorr(CDI_III$scale_1_org, CDI_III$mother_edu, weights = CDI_III$fexp, method = "Spearman")
+
+#0.2939578
+
+#checking for significance with unweighted data
+
+cor.test(CDI_III$scale_1_org, as.numeric(CDI_III$mother_edu), method = "spearman", exact = FALSE)
+
+#value= 0.2996371  , p-value: < 2.2e-16
+
+
+weightedCorr(CDI_III$scale_2_response, CDI_III$mother_edu, weights = CDI_III$fexp, method = "Spearman")
+#0.2148821
+
+#checking for significance with unweighted data
+
+cor.test(CDI_III$scale_2_response, as.numeric(CDI_III$mother_edu), method = "spearman", exact = FALSE)
+
+#value=  0.1984778  , p-value: 4.517e-14
+
+
+weightedCorr(CDI_III$scale_3_acceptance, CDI_III$mother_edu, weights = CDI_III$fexp, method = "Spearman")
+#-0.03429825
+
+#checking for significance with unweighted data
+
+cor.test(CDI_III$scale_3_acceptance, as.numeric(CDI_III$mother_edu), method = "spearman", exact = FALSE)
+
+#value=  -0.01915367  , p-value: 0.4709
+
+
+weightedCorr(CDI_III$scale_4_opportunity, CDI_III$mother_edu, weights = CDI_III$fexp, method = "Spearman")
+#0.2304228
+
+#checking for significance with unweighted data
+
+cor.test(CDI_III$scale_4_opportunity, as.numeric(CDI_III$mother_edu), method = "spearman", exact = FALSE)
+
+#value= 0.2218658  , p-value: < 2.2e-16
+
+weightedCorr(CDI_III$scale_5_games, CDI_III$mother_edu, weights = CDI_III$fexp, method = "Spearman")
+#0.374298
+
+#checking for significance with unweighted data
+
+cor.test(CDI_III$scale_5_games, as.numeric(CDI_III$mother_edu), method = "spearman", exact = FALSE)
+
+#value= 0.3835362  , p-value: < 2.2e-16
+
+weightedCorr(CDI_III$scale_6_mother_inv, CDI_III$mother_edu, weights = CDI_III$fexp, method = "Spearman")
+# 0.2429835
+
+#checking for significance with unweighted data
+
+cor.test(CDI_III$scale_6_mother_inv, as.numeric(CDI_III$mother_edu), method = "spearman", exact = FALSE)
+
+#value= 0.2523259  , p-value: < 2.2e-16
+
+
+
+```
+
+
+```{r checking correlation between CDI_scores and each HOME subscale}
+
+#for CDI_I - WP
+
+wtd.cor(CDI_I$scale_1_org, CDI_I$Word_Production, weight = CDI_I$fexp)
+#correlation    std.err  t.value      p.value
+#  0.1015806 0.02288926 4.437914 9.607389e-06
+
+
+wtd.cor(CDI_I$scale_2_response, CDI_I$Word_Production, weight = CDI_I$fexp)
+#correlation    std.err  t.value      p.value
+# 0.07481895 0.02294378 3.260968 0.001130089
+
+wtd.cor(CDI_I$scale_3_acceptance, CDI_I$Word_Production, weight = CDI_I$fexp)
+#correlation    std.err  t.value      p.value
+#  0.01710909 0.02300491 0.7437149 0.4571415
+
+wtd.cor(CDI_I$scale_4_opportunity, CDI_I$Word_Production, weight = CDI_I$fexp)
+#correlation    std.err  t.value      p.value
+# 0.1214084 0.02283807 5.316052 1.186073e-07
+
+
+wtd.cor(CDI_I$scale_5_games, CDI_I$Word_Production, weight = CDI_I$fexp)
+#correlation    std.err  t.value      p.value
+#  0.1775168 0.02264285 7.839863 7.475691e-15
+
+wtd.cor(CDI_I$scale_6_mother_inv, CDI_I$Word_Production, weight = CDI_I$fexp)
+#correlation    std.err  t.value      p.value
+# 0.1164774 0.02285166 5.097109 3.793454e-07
+
+
+
+#for CDI_I - WC
+
+wtd.cor(CDI_I$scale_1_org, CDI_I$Word_Comprehension, weight = CDI_I$fexp)
+#correlation    std.err  t.value      p.value
+# 0.05040639 0.02297902 2.193583 0.0283869
+
+
+wtd.cor(CDI_I$scale_2_response, CDI_I$Word_Comprehension, weight = CDI_I$fexp)
+#correlation    std.err  t.value      p.value
+# 0.03295343 0.02299578 1.433021 0.1520173
+
+wtd.cor(CDI_I$scale_3_acceptance, CDI_I$Word_Comprehension, weight = CDI_I$fexp)
+#correlation    std.err  t.value      p.value
+#   0.0565473 0.02297146 2.461633 0.01391939
+
+wtd.cor(CDI_I$scale_4_opportunity, CDI_I$Word_Comprehension, weight = CDI_I$fexp)
+#correlation    std.err  t.value      p.value
+#  0.1317147 0.02280782 5.774982 8.978702e-09
+
+
+wtd.cor(CDI_I$scale_5_games, CDI_I$Word_Comprehension, weight = CDI_I$fexp)
+#correlation    std.err  t.value      p.value
+ # 0.1227799 0.02283419 5.377021 8.512806e-08
+
+  
+wtd.cor(CDI_I$scale_6_mother_inv, CDI_I$Word_Comprehension, weight = CDI_I$fexp)
+#correlation    std.err  t.value      p.value
+# 0.0860843 0.02292286 3.755391 0.0001783116
+
+#for CDI_II - WP
+
+wtd.cor(CDI_II$scale_1_org, CDI_II$Word_Production, weight = CDI_II$fexp)
+#correlation    std.err  t.value      p.value
+# 0.1219619 0.01776922 6.863661 8.063497e-12
+
+
+wtd.cor(CDI_II$scale_2_response, CDI_II$Word_Production, weight = CDI_II$fexp)
+#correlation    std.err  t.value      p.value
+# 0.1380749 0.01773139 7.787028 9.264399e-15
+
+wtd.cor(CDI_II$scale_3_acceptance, CDI_II$Word_Production, weight = CDI_II$fexp)
+#correlation    std.err  t.value      p.value
+# 0.07155534 0.01785698 4.007135 6.289607e-05 
+
+wtd.cor(CDI_II$scale_4_opportunity, CDI_II$Word_Production, weight = CDI_II$fexp)
+#correlation    std.err  t.value      p.value
+# 0.1471516 0.01770798 8.309901 1.411031e-16
+
+
+wtd.cor(CDI_II$scale_5_games, CDI_II$Word_Production, weight = CDI_II$fexp)
+#correlation    std.err  t.value      p.value
+# 0.2251781 0.01744308 12.9093 3.511414e-37   
+
+wtd.cor(CDI_II$scale_6_mother_inv, CDI_II$Word_Production, weight = CDI_II$fexp)
+#correlation    std.err  t.value      p.value
+# 0.1384947 0.01773034 7.81117 7.679473e-15
+
+#for CDI_III - WP
+
+wtd.cor(CDI_III$scale_1_org, CDI_III$Word_Production, weight = CDI_III$fexp)
+#correlation    std.err  t.value      p.value
+#  0.1716029 0.02617126 6.556922 7.674719e-11
+
+
+wtd.cor(CDI_III$scale_2_response, CDI_III$Word_Production, weight = CDI_III$fexp)
+#correlation    std.err  t.value      p.value
+#  0.1579075 0.02623203 6.019644 2.222749e-09
+
+wtd.cor(CDI_III$scale_3_acceptance, CDI_III$Word_Production, weight = CDI_III$fexp)
+#correlation    std.err  t.value      p.value
+#  0.02224157 0.02655875 0.8374481 0.402482 
+
+wtd.cor(CDI_III$scale_4_opportunity, CDI_III$Word_Production, weight = CDI_III$fexp)
+#correlation    std.err  t.value      p.value
+# 0.2429294 0.02576953 9.427003 1.657243e-20
+
+
+wtd.cor(CDI_III$scale_5_games, CDI_III$Word_Production, weight = CDI_III$fexp)
+#correlation    std.err  t.value      p.value
+#  0.239904 0.02578952 9.30238 5.035094e-20
+
+
+wtd.cor(CDI_III$scale_6_mother_inv, CDI_III$Word_Production, weight = CDI_III$fexp)
+#correlation    std.err  t.value      p.value
+# 0.1662894 0.02619545 6.348024 2.929485e-10
+
+
+
+
+```
+
+
+```{r unadjusted and adjusted model with weights}
+
+```
+
+```{r reg analysis - with each level of home and CDI scores }
+
+#CDI_I
+
+a1 <- svyglm(Word_Comprehension ~ scale_1_org, design = CDI_I_svy)
+summary(a1)
+fit.svyglm(a1)
+
+a2 <- svyglm(Word_Comprehension ~ scale_2_response, design = CDI_I_svy)
+summary(a2)
+fit.svyglm(a2)
+
+a3 <- svyglm(Word_Comprehension ~ scale_3_acceptance, design = CDI_I_svy)
+summary(a3)
+fit.svyglm(a3)
+
+a4 <- svyglm(Word_Comprehension ~ scale_4_opportunity, design = CDI_I_svy)
+summary(a4)
+fit.svyglm(a4)
+
+a5 <- svyglm(Word_Comprehension ~ scale_5_games, design = CDI_I_svy)
+summary(a5)
+fit.svyglm(a5)
+
+a6 <- svyglm(Word_Comprehension ~ scale_6_mother_inv, design = CDI_I_svy)
+summary(a6)
+fit.svyglm(a6)
+
+#CDI_II
+
+b1 <- svyglm(Word_Production ~ scale_1_org, design = CDI_II_svy)
+summary(b1)
+fit.svyglm(b1)
+
+b2 <- svyglm(Word_Production ~ scale_2_response, design = CDI_II_svy)
+summary(b2)
+fit.svyglm(b2)
+
+b3<- svyglm(Word_Production ~ scale_3_acceptance, design = CDI_II_svy)
+summary(b3)
+fit.svyglm(b3)
+
+b4 <- svyglm(Word_Production ~ scale_4_opportunity, design = CDI_II_svy)
+summary(b4)
+fit.svyglm(b4)
+
+b5 <- svyglm(Word_Production ~ scale_5_games, design = CDI_II_svy)
+summary(b5)
+fit.svyglm(b5)
+
+b6 <- svyglm(Word_Production ~ scale_6_mother_inv, design = CDI_II_svy)
+summary(b6)
+fit.svyglm(b6)
+
+#CDI_III
+
+c1 <- svyglm(Word_Production ~ scale_1_org, design = CDI_III_svy)
+summary(c1)
+fit.svyglm(c1)
+
+c2 <- svyglm(Word_Production ~ scale_2_response, design = CDI_III_svy)
+summary(c2)
+fit.svyglm(c2)
+
+c3<- svyglm(Word_Production ~ scale_3_acceptance, design = CDI_III_svy)
+summary(c3)
+fit.svyglm(c3)
+
+c4 <- svyglm(Word_Production ~ scale_4_opportunity, design = CDI_III_svy)
+summary(c4)
+fit.svyglm(c4)
+
+c5 <- svyglm(Word_Production ~ scale_5_games, design = CDI_III_svy)
+summary(c5)
+fit.svyglm(c5)
+
+c6<- svyglm(Word_Production ~ scale_6_mother_inv, design = CDI_III_svy)
+summary(c6)
+fit.svyglm(c6)
+
+
+
+
+```
+
+
+```{r reg analysis  for CDI_I}
+
+#Association btw CDI scores and other variables
+
+#for word_comprehension
+
+u1<-svyglm(Word_Comprehension ~ Home_inventory, design = CDI_I_svy) 
+summary(u1)
+confint(u1)
+
+u2<-svyglm(Word_Comprehension ~ Age_months, design = CDI_I_svy) 
+summary(u2)
+confint(u2)
+
+u3 <- svyglm(Word_Comprehension ~ gender, design = CDI_I_svy)
+summary(u3)
+confint(u3)
+
+u4 <-svyglm(Word_Comprehension ~ mother_edu_cat, design = CDI_I_svy) 
+summary(u4)
+confint(u4)
+
+u5 <- svyglm(Word_Comprehension ~ as.factor(lang_spoken), design = CDI_I_svy) 
+summary(u5)
+confint(u5)
+
+u6 <- svyglm(Word_Comprehension ~ prov_cat, design = CDI_I_svy) 
+summary(u6)
+confint(u6)
+
+
+u7 <- svyglm(Word_Comprehension ~ area_cat, design = CDI_I_svy)
+summary(u7)
+confint(u7)
+
+
+u8 <- svyglm(Word_Comprehension ~ region_cat, design = CDI_I_svy) 
+summary(u8)
+confint(u8)
+
+u9<- svyglm(Word_Comprehension ~ mal_nourished, design = CDI_I_svy) 
+summary(u9)
+confint(u9)
+
+
+#Association btw Home scores and other variables
+
+summary(svyglm(Home_inventory ~ Age_months, design = CDI_I_svy)) 
+
+summary(svyglm(Home_inventory ~ gender, design = CDI_I_svy)) 
+
+summary(svyglm(Home_inventory ~ mother_edu_cat, design = CDI_I_svy)) 
+
+summary(svyglm(Home_inventory ~ prov_cat, design = CDI_I_svy)) 
+
+summary(svyglm(Home_inventory ~ area_cat, design = CDI_I_svy)) 
+
+summary(svyglm(Home_inventory ~ region_cat, design = CDI_I_svy)) 
+
+summary(svyglm(Home_inventory ~ height, design = CDI_I_svy)) 
+
+summary(svyglm(Home_inventory ~ mal_nourished, design = CDI_I_svy))
+
+summary(svyglm(Home_inventory ~ as.factor(lang_spoken), design = CDI_I_svy))
+
+#model building
+
+m1<- svyglm(Word_Comprehension ~  Home_inventory ,  design = CDI_I_svy)
+AIC(m1)
+summary (m1)
+confint(m1)
+fit.svyglm(m1)
+
+
+m2<- svyglm(Word_Comprehension ~  Home_inventory + Age_months,  design =CDI_I_svy)
+AIC(m2)
+summary (m2)
+confint(m2)
+fit.svyglm(m2)
+
+m3<- svyglm(Word_Comprehension ~  Home_inventory + Age_months + gender,  design = CDI_I_svy)
+AIC(m3)
+summary (m3)
+confint(m3)
+fit.svyglm(m3)
+
+m4<- svyglm(Word_Comprehension ~  Home_inventory + Age_months + gender + mother_edu_cat,  design = CDI_I_svy)
+AIC(m4)
+summary (m4)
+confint(m4)
+fit.svyglm(m4)
+
+m5<- svyglm(Word_Comprehension ~  Home_inventory + Age_months + gender + mother_edu_cat + area_cat,  design = CDI_I_svy)
+AIC(m5)
+summary (m5)
+confint(m5)
+fit.svyglm(m5)
+
+m6<- svyglm(Word_Comprehension ~  Home_inventory + Age_months + gender+  mother_edu_cat + area_cat + prov_cat,  design = CDI_I_svy)
+AIC(m6)
+summary (m6)
+confint(m6)
+fit.svyglm(m6)
+
+m7<- svyglm(Word_Comprehension ~  Home_inventory  + Age_months + gender+ mother_edu_cat + area_cat  + prov_cat+ region_cat +height  ,design = CDI_I_svy)
+AIC(m7)
+summary (m7)
+confint(m7)
+fit.svyglm(m7)
+
+
+m8<- svyglm(Word_Comprehension ~  Home_inventory  + Age_months + gender+ mother_edu_cat + area_cat  + prov_cat+ region_cat +height + mal_nourished  ,design = CDI_I_svy)
+AIC(m8)
+summary (m8)
+confint(m8)
+fit.svyglm(m8)
+
+
+m9<- svyglm(Word_Comprehension ~  Home_inventory  + Age_months + gender+ mother_edu_cat + area_cat  + prov_cat+ region_cat +height + mal_nourished  ,design = CDI_I_svy)
+AIC(m9)
+summary (m9)
+confint(m9)
+fit.svyglm(m9)
+
+
+
+#best adjusted model
+m10<- svyglm(Word_Comprehension ~  Home_inventory  + Age_months + gender+ mother_edu_cat + area_cat+ region_cat + mal_nourished,design = CDI_I_svy)
+AIC(m10)
+summary (m10)
+confint(m10)
+fit.svyglm(m10)
+
+
+#for word production
+
+t1<-svyglm(Word_Production ~ Home_inventory, design = CDI_I_svy) 
+summary(t1)
+confint(t1)
+
+t2<-svyglm(Word_Production ~ Age_months, design = CDI_I_svy) 
+summary(t2)
+confint(t2)
+
+t3 <- svyglm(Word_Production ~ gender, design = CDI_I_svy) 
+summary(t3)
+confint(t3)
+
+t4 <-svyglm(Word_Production ~ mother_edu_cat, design = CDI_I_svy) 
+summary(t4)
+confint(t4)
+
+t5 <- svyglm(Word_Production ~ as.factor(lang_spoken), design = CDI_I_svy) 
+summary(t5)
+confint(t5)
+
+t6 <- svyglm(Word_Production ~ prov_cat, design = CDI_I_svy)
+summary(t6)
+confint(t6)
+
+
+t7 <- svyglm(Word_Production ~ area_cat, design = CDI_I_svy) 
+summary(t7)
+confint(t7)
+
+
+t8 <- svyglm(Word_Production ~ region_cat, design = CDI_I_svy) 
+summary(t8)
+confint(t8)
+
+t9<- svyglm(Word_Production ~ mal_nourished, design = CDI_I_svy) 
+summary(t9)
+confint(t9)
+
+
+#model building
+
+
+#best adjusted model
+k10<- svyglm(Word_Production ~  Home_inventory  + Age_months + gender+ mother_edu_cat + area_cat+ region_cat+ mal_nourished,design = CDI_I_svy)
+AIC(k10)
+summary (k10)
+confint(k10)
+fit.svyglm(k10)
+
+```
+
+
+```{r reg analysis for CDI_II}
+
+#Association btw CDI scores and other variables
+
+v1<-svyglm(Word_Production ~ Home_inventory, design = CDI_II_svy) 
+summary(v1)
+confint(v1)
+
+v2<-svyglm(Word_Production ~ Age_months, design = CDI_II_svy) 
+summary(v2)
+confint(v2)
+
+v3 <- svyglm(Word_Production ~ gender, design = CDI_II_svy) 
+summary(v3)
+confint(v3)
+
+v4<-svyglm(Word_Production ~ mother_edu_cat, design = CDI_II_svy) 
+summary(v4)
+confint(v4)
+
+v5 <- svyglm(Word_Production ~ as.factor(lang_spoken), design = CDI_II_svy) 
+summary(v5)
+confint(v5)
+
+v6 <- svyglm(Word_Production ~ prov_cat, design = CDI_II_svy) 
+summary(v6)
+confint(v6)
+
+
+v7 <- svyglm(Word_Production ~ area_cat, design = CDI_II_svy) 
+summary(v7)
+confint(v7)
+
+
+v8 <- svyglm(Word_Production ~ region_cat, design = CDI_II_svy) 
+summary(v8)
+confint(v8)
+
+v9<- svyglm(Word_Production ~ mal_nourished, design = CDI_II_svy) 
+summary(v9)
+confint(v9)
+
+#Association btw Home scores and other variables
+
+summary(svyglm(Home_inventory ~ Age_months, design = CDI_II_svy)) 
+
+summary(svyglm(Home_inventory ~ gender, design = CDI_II_svy)) 
+
+summary(svyglm(Home_inventory ~ mother_edu_cat, design = CDI_II_svy)) 
+
+summary(svyglm(Home_inventory ~ prov_cat, design = CDI_II_svy)) 
+
+summary(svyglm(Home_inventory ~ area_cat, design = CDI_II_svy)) 
+
+summary(svyglm(Home_inventory ~ region_cat, design = CDI_II_svy)) 
+
+summary(svyglm(Home_inventory ~ height, design = CDI_II_svy)) 
+
+summary(svyglm(Home_inventory ~ mal_nourished, design = CDI_II_svy))
+
+summary(svyglm(Home_inventory ~ as.factor(lang_spoken), design = CDI_II_svy))
+
+#model building
+
+n1<- svyglm(Word_Production ~  Home_inventory ,  design = CDI_II_svy)
+AIC(n1)
+summary (n1)
+confint(n1)
+fit.svyglm(n1)
+
+
+n2<- svyglm(Word_Production ~  Home_inventory + Age_months,  design =CDI_II_svy)
+AIC(n2)
+summary (n2)
+confint(n2)
+fit.svyglm(n2)
+
+n3<- svyglm(Word_Production ~  Home_inventory + Age_months + gender,  design = CDI_II_svy)
+AIC(n3)
+summary (n3)
+confint(n3)
+fit.svyglm(n3)
+
+n4<- svyglm(Word_Production ~  Home_inventory + Age_months + gender + mother_edu_cat,  design = CDI_II_svy)
+AIC(n4)
+summary (n4)
+confint(n4)
+fit.svyglm(n4)
+
+n5<- svyglm(Word_Production ~  Home_inventory + Age_months + gender + mother_edu_cat + area_cat,  design = CDI_II_svy)
+AIC(n5)
+summary (n5)
+confint(n5)
+fit.svyglm(n5)
+
+n6<- svyglm(Word_Production ~  Home_inventory + Age_months + gender+  mother_edu_cat + area_cat + prov_cat,  design = CDI_II_svy)
+AIC(n6)
+summary (n6)
+confint(n6)
+fit.svyglm(n6)
+
+n7<- svyglm(Word_Production ~  Home_inventory  + Age_months + gender+ mother_edu_cat + area_cat  + prov_cat+ region_cat   ,design = CDI_II_svy)
+AIC(n7)
+summary (n7)
+confint(n7)
+fit.svyglm(n7)
+
+
+n8<- svyglm(Word_Production ~  Home_inventory  + Age_months + gender+ mother_edu_cat + area_cat  + prov_cat+ region_cat +height   ,design = CDI_II_svy)
+AIC(n8)
+summary (n8)
+confint(n8)
+fit.svyglm(n8)
+
+
+n9<- svyglm(Word_Production ~  Home_inventory  + Age_months + gender+ mother_edu_cat + area_cat  + prov_cat+ region_cat +height + mal_nourished  ,design = CDI_II_svy)
+AIC(n9)
+summary (n9)
+confint(n9)
+fit.svyglm(n9)
+
+#best adjusted model
+n10<- svyglm(Word_Production ~  Home_inventory  + Age_months + gender+ mother_edu_cat + area_cat+ region_cat + mal_nourished,design = CDI_II_svy)
+AIC(n10)
+summary (n10)
+confint(n10)
+fit.svyglm(n10)
+
+
+```
+
+
+```{r reg analysis  for CDI_III}
+
+#Association btw CDI scores and other variables
+
+w1<-svyglm(Word_Production ~ Home_inventory, design = CDI_III_svy) 
+summary(w1)
+confint(w1)
+
+w2<-svyglm(Word_Production ~ Age_months, design = CDI_III_svy) 
+summary(w2)
+confint(w2)
+
+w3 <- svyglm(Word_Production ~ gender, design = CDI_III_svy) 
+summary(w3)
+confint(w3)
+
+w4<-svyglm(Word_Production ~ mother_edu_cat, design = CDI_III_svy) 
+summary(w4)
+confint(w4)
+
+w5 <- svyglm(Word_Production ~ as.factor(lang_spoken), design = CDI_III_svy) 
+summary(w5)
+confint(w5)
+
+w6<- svyglm(Word_Production ~ prov_cat, design = CDI_III_svy) 
+summary(w6)
+confint(w6)
+
+
+w7<- svyglm(Word_Production ~ area_cat, design = CDI_III_svy) 
+summary(w7)
+confint(w7)
+
+
+w8 <- svyglm(Word_Production ~ region_cat, design = CDI_III_svy) 
+summary(w8)
+confint(w8)
+
+w9<- svyglm(Word_Production ~ mal_nourished, design = CDI_III_svy) 
+summary(w9)
+confint(w9)
+
+#Association btw Home scores and other variables
+
+summary(svyglm(Home_inventory ~ Age_months, design = CDI_III_svy)) 
+
+summary(svyglm(Home_inventory ~ gender, design = CDI_III_svy)) 
+
+summary(svyglm(Home_inventory ~ mother_edu_cat, design = CDI_III_svy)) 
+
+summary(svyglm(Home_inventory ~ prov_cat, design = CDI_III_svy)) 
+
+summary(svyglm(Home_inventory ~ area_cat, design = CDI_III_svy)) 
+
+summary(svyglm(Home_inventory ~ region_cat, design = CDI_III_svy)) 
+
+summary(svyglm(Home_inventory ~ height, design = CDI_III_svy))  
+
+summary(svyglm(Home_inventory ~ mal_nourished, design = CDI_III_svy))
+
+summary(svyglm(Home_inventory ~ as.factor(lang_spoken), design = CDI_III_svy))
+
+#model building
+
+p1<- svyglm(Word_Production ~  Home_inventory ,  design = CDI_III_svy)
+AIC(p1)
+summary (p1)
+confint(p1)
+fit.svyglm(p1)
+
+
+p2<- svyglm(Word_Production ~  Home_inventory + Age_months,  design =CDI_III_svy)
+AIC(p2)
+summary (p2)
+confint(p2)
+fit.svyglm(p2)
+
+p3<- svyglm(Word_Production ~  Home_inventory + Age_months + gender,  design = CDI_III_svy)
+AIC(p3)
+summary (p3)
+confint(p3)
+fit.svyglm(p3)
+
+p4<- svyglm(Word_Production ~  Home_inventory + Age_months + gender + mother_edu_cat,  design = CDI_III_svy)
+AIC(p4)
+summary (p4)
+confint(p4)
+fit.svyglm(p4)
+
+p5<- svyglm(Word_Production ~  Home_inventory + Age_months + gender + mother_edu_cat + area_cat,  design = CDI_III_svy)
+AIC(p5)
+summary (p5)
+confint(p5)
+fit.svyglm(p5)
+
+p6 <- svyglm(Word_Production ~  Home_inventory + Age_months + gender +  mother_edu_cat + area_cat + prov_cat,  design = CDI_III_svy)
+AIC(p6)
+summary (p6)
+confint(p6)
+fit.svyglm(p6)
+
+p7<- svyglm(Word_Production ~  Home_inventory  + Age_months + gender+ mother_edu_cat + area_cat  + prov_cat+ region_cat   ,design = CDI_III_svy)
+AIC(p7)
+summary (p7)
+confint(p7)
+fit.svyglm(p7)
+
+
+p8<- svyglm(Word_Production ~  Home_inventory  + Age_months + gender+ mother_edu_cat + area_cat  + prov_cat+ region_cat +height   ,design = CDI_III_svy)
+AIC(p8)
+summary (p8)
+confint(p8)
+fit.svyglm(p8)
+
+
+p9<- svyglm(Word_Production ~  Home_inventory  + Age_months + gender+ mother_edu_cat + area_cat  + prov_cat+ region_cat +height + mal_nourished  ,design = CDI_III_svy)
+AIC(p9)
+summary (p9)
+confint(p9)
+fit.svyglm(p9)
+
+
+#best adjusted model
+p10<- svyglm(Word_Production ~  Home_inventory  + Age_months + gender+ mother_edu_cat + area_cat+ region_cat + mal_nourished,design = CDI_III_svy)
+AIC(p10)
+summary (p10)
+confint(p10)
+fit.svyglm(p10)
+
+```
+
+
