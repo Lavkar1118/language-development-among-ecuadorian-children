@@ -23,10 +23,23 @@ Assessed the association between home environment and language development among
 
 * HOME Inventory scors were calculated for each of the age categories.
 
+![This is an image](/Assets/HOME_scores.png)
+
+* Language development and HOME scores in the sample indcated a positive relationship.
+
+![This is an image](/Assets/HOME_vs_CDI.png)
+
 * Mother's education one of the most important factor known to contribute towards the physical environment of the child was assessed in relation to both HOME and language developmental scores.
+
+![This is an image](/Assets/HOME_vs_Mat_edu.png)
+![This is an image](/Assets/CDI_vs_Mat_edu.png)
 
 * Unadjusted and adjusted liner regression models were build to quantify the statistical significance of primary and secondary independent variables in our analysis.
 
+![This is an image](/Assets/Reg_12-18.png)
+![This is an image](/Assets/Reg2_12-18.png)
+![This is an image](/Assets/Reg_19-30.png)
+![This is an image](/Assets/Reg_31-35.png)
 
 #### Results:
 * Home environment does have a positive effect on the Language development during the early stages of life
