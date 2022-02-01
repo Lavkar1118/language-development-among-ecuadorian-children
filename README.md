@@ -34,9 +34,13 @@ Assessed the association between home environment and language development among
 ![This is an image](/Assets/HOME_vs_Mat_edu.png)
 ![This is an image](/Assets/CDI_vs_Mat_edu.png)
 
-* Unadjusted and adjusted liner regression models were build to quantify the statistical significance of primary and secondary independent variables in our analysis.
+* Correlation coefficiencts were derived among mother's education and the dependent and independent variables
 
 ![This is an image](/Assets/Reg_12-18.png)
+
+* Unadjusted and adjusted liner regression models were build to quantify the statistical significance of primary and secondary independent variables in our analysis.
+
+![This is an image](/Assets/Correlations.png)
 ![This is an image](/Assets/Reg2_12-18.png)
 ![This is an image](/Assets/Reg_19-30.png)
 ![This is an image](/Assets/Reg_31-35.png)
