@@ -41,7 +41,7 @@ Assessed the association between home environment and language development among
 ![This is an image](/Assets/Reg_19-30.png)
 ![This is an image](/Assets/Reg_31-35.png)
 
-#### Results:
+### Results:
 * Home environment does have a positive effect on the Language development during the early stages of life
 * Effect of HOME on language development is mediated by maternal education
 * Difference exists in the level of emphasis of HOME subscales for correlation vs. causation
